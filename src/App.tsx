@@ -1,7 +1,7 @@
 import Pica from 'pica';
 import JSZip from 'jszip';
 import Smartcrop from 'smartcrop';
-import { CSSProperties, ChangeEvent, DragEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, ChangeEvent, DragEvent, MouseEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type FitMode = 'contain' | 'crop';
 type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
@@ -101,6 +101,8 @@ function App() {
   const [editorCropRect, setEditorCropRect] = useState<CropRect | null>(null);
   const [isDraggingCrop, setIsDraggingCrop] = useState(false);
   const dragStateRef = useRef<{ startX: number; startY: number; origin: CropRect } | null>(null);
+  const editingImageIdRef = useRef<string | null>(null);
+  const isDraggingCropRef = useRef(false);
 
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
 
@@ -129,6 +131,47 @@ function App() {
   useEffect(() => {
     imageUrlsRef.current = images.map((image) => image.previewUrl);
   }, [images]);
+
+  useEffect(() => {
+    editingImageIdRef.current = editingImageId;
+  }, [editingImageId]);
+
+  useEffect(() => {
+    isDraggingCropRef.current = isDraggingCrop;
+  }, [isDraggingCrop]);
+
+  useEffect(() => {
+    const onGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        disableInlineCropEditing();
+      }
+    };
+
+    const onGlobalPointerDown = (event: globalThis.PointerEvent) => {
+      if (isDraggingCropRef.current) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+
+      if (target.closest('.card') || target.closest('.controls-sidebar') || target.closest('.dropzone') || target.closest('.topbar')) {
+        return;
+      }
+
+      disableInlineCropEditing();
+    };
+
+    window.addEventListener('keydown', onGlobalKeyDown);
+    window.addEventListener('pointerdown', onGlobalPointerDown);
+
+    return () => {
+      window.removeEventListener('keydown', onGlobalKeyDown);
+      window.removeEventListener('pointerdown', onGlobalPointerDown);
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -244,6 +287,9 @@ function App() {
   };
 
   const removeImage = (id: string) => {
+    if (editingImageIdRef.current === id) {
+      disableInlineCropEditing();
+    }
     setImages((prev) => {
       const toRemove = prev.find((i) => i.id === id);
       if (toRemove) URL.revokeObjectURL(toRemove.previewUrl);
@@ -393,6 +439,24 @@ function App() {
     };
   };
 
+  const finishCropDrag = (image: SourceImage) => {
+    if (!dragStateRef.current || !editorCropRect) {
+      return;
+    }
+
+    setIsDraggingCrop(false);
+    dragStateRef.current = null;
+
+    updateImage(image.id, (current) => ({
+      ...current,
+      manualCropOverride: {
+        x: editorCropRect.x / current.dimensions.width,
+        y: editorCropRect.y / current.dimensions.height
+      },
+      smartCropApplied: false
+    }));
+  };
+
   const onCropDragMove = (event: PointerEvent<HTMLDivElement>, image: SourceImage) => {
     if (!dragStateRef.current || !cropEditorFrameRef.current) {
       return;
@@ -418,23 +482,15 @@ function App() {
   };
 
   const onCropDragEnd = (event: PointerEvent<HTMLDivElement>, image: SourceImage) => {
-    if (!editorCropRect) {
-      return;
-    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    setIsDraggingCrop(false);
-    dragStateRef.current = null;
+    finishCropDrag(image);
+  };
 
-    updateImage(image.id, (current) => ({
-      ...current,
-      manualCropOverride: {
-        x: editorCropRect.x / current.dimensions.width,
-        y: editorCropRect.y / current.dimensions.height
-      },
-      smartCropApplied: false
-    }));
+  const onCropMouseDragEnd = (event: MouseEvent<HTMLDivElement>, image: SourceImage) => {
+    event.preventDefault();
+    finishCropDrag(image);
   };
 
   const formatToMime = (format: OutputFormat, fallbackExt: string) => {
@@ -650,7 +706,7 @@ function App() {
       <div className="workspace">
         <main className="workspace-main">
           <section
-            className={`panel dropzone ${dragOver ? 'active' : ''} ${images.length > 0 ? 'compact' : ''}`}
+            className={`panel dropzone ${dragOver ? 'active' : ''} ${images.length > 0 ? 'compact' : 'prominent'}`}
             onDrop={onDrop}
             onDragOver={(e) => {
               e.preventDefault();
@@ -658,7 +714,7 @@ function App() {
             }}
             onDragLeave={() => setDragOver(false)}
           >
-            <p>{images.length > 0 ? 'Drop more images to add to this batch.' : 'Drag & drop images to begin.'}</p>
+            <p>{images.length > 0 ? 'Drop more images anywhere in this bar to add to your batch.' : 'Drag & drop images to begin your workspace.'}</p>
             <input
               id="picker"
               type="file"
@@ -668,6 +724,11 @@ function App() {
             />
             {images.length === 0 && (
               <label htmlFor="picker" className="button secondary">
+                Select Images
+              </label>
+            )}
+            {images.length > 0 && (
+              <label htmlFor="picker" className="button secondary compact-picker-button">
                 Select Images
               </label>
             )}
@@ -694,6 +755,36 @@ function App() {
 
               return (
                 <article key={image.id} className={`card ${isInlineEditing ? 'editing' : ''}`}>
+                  <div className="card-header">
+                    <div className="tile-actions">
+                      <button
+                        className="link"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeImage(image.id);
+                        }}
+                        disabled={isProcessing}
+                      >
+                        Remove
+                      </button>
+                      {image.manualCropOverride && options.fitMode === 'crop' && (
+                        <button
+                          className="link"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            clearManualCropOverride(image.id);
+                            if (editingImageId === image.id) {
+                              setEditorCropRect(getCropRect(image.dimensions.width, image.dimensions.height, getEffectiveFocalPoint(image)));
+                            }
+                          }}
+                          disabled={isProcessing}
+                        >
+                          Reset crop
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   <div
                     ref={isInlineEditing ? cropEditorFrameRef : null}
                     className={`thumb-wrap fit-${options.fitMode} ${isInlineEditing ? 'inline-editing' : ''}`}
@@ -707,30 +798,6 @@ function App() {
                       if (options.fitMode === 'crop') {
                         enableInlineCropEditing(image);
                       }
-                    }}
-                    onPointerDown={(event) => {
-                      if (!isInlineEditing || isProcessing) {
-                        return;
-                      }
-                      onCropDragStart(event);
-                    }}
-                    onPointerMove={(event) => {
-                      if (!isInlineEditing || isProcessing) {
-                        return;
-                      }
-                      onCropDragMove(event, image);
-                    }}
-                    onPointerUp={(event) => {
-                      if (!isInlineEditing || isProcessing) {
-                        return;
-                      }
-                      onCropDragEnd(event, image);
-                    }}
-                    onPointerCancel={(event) => {
-                      if (!isInlineEditing || isProcessing) {
-                        return;
-                      }
-                      onCropDragEnd(event, image);
                     }}
                   >
                     {options.fitMode === 'contain' ? (
@@ -771,34 +838,53 @@ function App() {
                       />
                     )}
 
-                    <div className="tile-actions">
-                      <button
-                        className="link"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          removeImage(image.id);
+                    {isInlineEditing && (
+                      <div
+                        className="crop-drag-surface"
+                        onPointerDown={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropDragStart(event);
                         }}
-                        disabled={isProcessing}
-                      >
-                        Remove
-                      </button>
-                      {image.manualCropOverride && options.fitMode === 'crop' && (
-                        <button
-                          className="link"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            clearManualCropOverride(image.id);
-                            if (editingImageId === image.id) {
-                              setEditorCropRect(getCropRect(image.dimensions.width, image.dimensions.height, getEffectiveFocalPoint(image)));
-                              disableInlineCropEditing();
-                            }
-                          }}
-                          disabled={isProcessing}
-                        >
-                          Reset crop
-                        </button>
-                      )}
-                    </div>
+                        onPointerMove={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropDragMove(event, image);
+                        }}
+                        onPointerUp={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropDragEnd(event, image);
+                        }}
+                        onPointerCancel={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropDragEnd(event, image);
+                        }}
+                        onPointerLeave={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropDragEnd(event, image);
+                        }}
+                        onMouseUp={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropMouseDragEnd(event, image);
+                        }}
+                        onMouseLeave={(event) => {
+                          if (isProcessing) {
+                            return;
+                          }
+                          onCropMouseDragEnd(event, image);
+                        }}
+                      />
+                    )}
                   </div>
 
                   <div className="meta">
