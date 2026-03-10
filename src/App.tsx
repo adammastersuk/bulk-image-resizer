@@ -1,7 +1,7 @@
 import Pica from 'pica';
 import JSZip from 'jszip';
 import Smartcrop from 'smartcrop';
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type FitMode = 'contain' | 'crop';
 type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
@@ -16,12 +16,15 @@ interface SourceImage {
   previewUrl: string;
   dimensions: { width: number; height: number };
   manualFocalPoint?: { x: number; y: number };
+  autoFocalPoint?: { x: number; y: number };
+  smartCropApplied?: boolean;
   status: ItemStatus;
   error?: string;
 }
 
 interface ProcessedImage {
   itemId: string;
+  index: number;
   filename: string;
   blob: Blob;
 }
@@ -30,6 +33,7 @@ interface ProcessOptions {
   width: number;
   height: number;
   fitMode: FitMode;
+  backgroundColor: string;
   useAutoFocal: boolean;
   format: OutputFormat;
   quality: number;
@@ -44,6 +48,7 @@ const DEFAULT_OPTIONS: ProcessOptions = {
   width: 1200,
   height: 1200,
   fitMode: 'contain',
+  backgroundColor: '#ffffff',
   useAutoFocal: true,
   format: 'original',
   quality: 0.9,
@@ -233,10 +238,12 @@ function App() {
     });
   };
 
+  const updateImage = (id: string, updater: (image: SourceImage) => SourceImage) => {
+    setImages((prev) => prev.map((img) => (img.id === id ? updater(img) : img)));
+  };
+
   const updateManualFocal = (id: string, x: number, y: number) => {
-    setImages((prev) =>
-      prev.map((img) => (img.id === id ? { ...img, manualFocalPoint: { x, y } } : img))
-    );
+    updateImage(id, (img) => ({ ...img, manualFocalPoint: { x, y }, smartCropApplied: false }));
   };
 
   const loadImage = (file: Blob): Promise<HTMLImageElement> =>
@@ -254,7 +261,33 @@ function App() {
       img.src = url;
     });
 
-  const drawCroppedSource = async (image: SourceImage, img: HTMLImageElement): Promise<HTMLCanvasElement> => {
+  const detectAutoFocalPoint = async (
+    image: SourceImage,
+    img: HTMLImageElement,
+    cropWidth: number,
+    cropHeight: number
+  ): Promise<{ x: number; y: number } | null> => {
+    if (!options.useAutoFocal || image.manualFocalPoint) {
+      return null;
+    }
+
+    try {
+      const result = await Smartcrop.crop(img, { width: cropWidth, height: cropHeight });
+      return {
+        x: (result.topCrop.x + result.topCrop.width / 2) / img.naturalWidth,
+        y: (result.topCrop.y + result.topCrop.height / 2) / img.naturalHeight
+      };
+    } catch (error) {
+      console.warn(`Smartcrop failed for ${image.file.name}; falling back to centered crop.`, error);
+      return null;
+    }
+  };
+
+  const drawCroppedSource = (
+    image: SourceImage,
+    img: HTMLImageElement,
+    focalPoint: { x: number; y: number } | null
+  ): HTMLCanvasElement => {
     const sourceCanvas = document.createElement('canvas');
     const targetRatio = options.width / options.height;
 
@@ -273,10 +306,9 @@ function App() {
     if (image.manualFocalPoint) {
       centerX = image.manualFocalPoint.x * img.naturalWidth;
       centerY = image.manualFocalPoint.y * img.naturalHeight;
-    } else if (options.useAutoFocal) {
-      const result = await Smartcrop.crop(img, { width: cropWidth, height: cropHeight });
-      centerX = result.topCrop.x + result.topCrop.width / 2;
-      centerY = result.topCrop.y + result.topCrop.height / 2;
+    } else if (focalPoint) {
+      centerX = focalPoint.x * img.naturalWidth;
+      centerY = focalPoint.y * img.naturalHeight;
     }
 
     const x = Math.max(0, Math.min(img.naturalWidth - cropWidth, Math.round(centerX - cropWidth / 2)));
@@ -288,16 +320,6 @@ function App() {
     if (!ctx) throw new Error('Cannot access canvas context.');
 
     ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-    return sourceCanvas;
-  };
-
-  const drawContainedSource = (img: HTMLImageElement): HTMLCanvasElement => {
-    const sourceCanvas = document.createElement('canvas');
-    sourceCanvas.width = img.naturalWidth;
-    sourceCanvas.height = img.naturalHeight;
-    const ctx = sourceCanvas.getContext('2d');
-    if (!ctx) throw new Error('Cannot access canvas context.');
-    ctx.drawImage(img, 0, 0);
     return sourceCanvas;
   };
 
@@ -346,39 +368,69 @@ function App() {
 
   const processImage = async (image: SourceImage, index: number): Promise<ProcessedImage> => {
     const loaded = await loadImage(image.file);
-    const sourceCanvas =
-      options.fitMode === 'crop' ? await drawCroppedSource(image, loaded) : drawContainedSource(loaded);
-
     const destinationCanvas = document.createElement('canvas');
     destinationCanvas.width = options.width;
     destinationCanvas.height = options.height;
+    const ctx = destinationCanvas.getContext('2d');
+    if (!ctx) throw new Error('Cannot access canvas context.');
+
+    // Memory/performance strategy:
+    // - Keep only one decoded image + one temporary canvas per task.
+    // - Render directly to the final target canvas to avoid duplicate full-size copies.
+    // - Explicitly clear temporary canvases once blob encoding is complete.
+    let tempCanvas: HTMLCanvasElement | null = null;
+    let autoFocalPoint: { x: number; y: number } | null = null;
 
     if (options.fitMode === 'contain') {
-      const ctx = destinationCanvas.getContext('2d');
-      if (!ctx) throw new Error('Cannot access canvas context.');
-      ctx.clearRect(0, 0, options.width, options.height);
+      ctx.fillStyle = options.backgroundColor;
+      ctx.fillRect(0, 0, options.width, options.height);
 
-      const ratio = Math.min(options.width / sourceCanvas.width, options.height / sourceCanvas.height);
-      const drawWidth = Math.round(sourceCanvas.width * ratio);
-      const drawHeight = Math.round(sourceCanvas.height * ratio);
+      const ratio = Math.min(options.width / loaded.naturalWidth, options.height / loaded.naturalHeight);
+      const drawWidth = Math.max(1, Math.round(loaded.naturalWidth * ratio));
+      const drawHeight = Math.max(1, Math.round(loaded.naturalHeight * ratio));
       const x = Math.floor((options.width - drawWidth) / 2);
       const y = Math.floor((options.height - drawHeight) / 2);
 
-      const tempCanvas = document.createElement('canvas');
+      tempCanvas = document.createElement('canvas');
       tempCanvas.width = drawWidth;
       tempCanvas.height = drawHeight;
-      await pica.resize(sourceCanvas, tempCanvas);
+      await pica.resize(loaded, tempCanvas);
       ctx.drawImage(tempCanvas, x, y);
     } else {
-      await pica.resize(sourceCanvas, destinationCanvas);
+      const targetRatio = options.width / options.height;
+      let cropWidth = loaded.naturalWidth;
+      let cropHeight = loaded.naturalHeight;
+
+      if (loaded.naturalWidth / loaded.naturalHeight > targetRatio) {
+        cropWidth = Math.round(loaded.naturalHeight * targetRatio);
+      } else {
+        cropHeight = Math.round(loaded.naturalWidth / targetRatio);
+      }
+
+      autoFocalPoint = await detectAutoFocalPoint(image, loaded, cropWidth, cropHeight);
+      tempCanvas = drawCroppedSource(image, loaded, autoFocalPoint);
+      await pica.resize(tempCanvas, destinationCanvas);
+      updateImage(image.id, (current) => ({
+        ...current,
+        autoFocalPoint: autoFocalPoint ?? undefined,
+        smartCropApplied: !current.manualFocalPoint && Boolean(autoFocalPoint)
+      }));
     }
 
     const { mime, ext } = formatToMime(options.format, image.ext);
     const blob = await canvasToBlob(destinationCanvas, mime, options.quality);
     const filename = `${buildName(options.renamePattern, image.name, index)}.${ext}`;
 
+    if (tempCanvas) {
+      tempCanvas.width = 0;
+      tempCanvas.height = 0;
+    }
+    destinationCanvas.width = 0;
+    destinationCanvas.height = 0;
+
     return {
       itemId: image.id,
+      index,
       filename,
       blob
     };
@@ -407,39 +459,59 @@ function App() {
     }
 
     setProgress({ done: 0, total: images.length });
-    setImages((prev) => prev.map((img) => ({ ...img, status: 'idle', error: undefined })));
+    setImages((prev) =>
+      prev.map((img) => ({
+        ...img,
+        status: 'idle',
+        error: undefined,
+        autoFocalPoint: options.fitMode === 'crop' ? undefined : img.autoFocalPoint,
+        smartCropApplied: options.fitMode === 'crop' ? false : img.smartCropApplied
+      }))
+    );
 
     const outputs: ProcessedImage[] = [];
+    const concurrencyLimit = 3;
+    let currentIndex = 0;
 
-    for (let i = 0; i < images.length; i += 1) {
-      const image = images[i];
-      setImages((prev) => prev.map((img) => (img.id === image.id ? { ...img, status: 'processing' } : img)));
+    const worker = async () => {
+      while (currentIndex < images.length) {
+        const i = currentIndex;
+        currentIndex += 1;
+        const image = images[i];
 
-      try {
-        const result = await processImage(image, i);
-        outputs.push(result);
+        updateImage(image.id, (img) => ({ ...img, status: 'processing' }));
 
-        if (directoryHandle) {
-          const fileHandle = await directoryHandle.getFileHandle(result.filename, { create: true });
-          const writable = await fileHandle.createWritable();
-          await writable.write(result.blob);
-          await writable.close();
+        try {
+          const result = await processImage(image, i);
+          outputs.push(result);
+
+          if (directoryHandle) {
+            const fileHandle = await directoryHandle.getFileHandle(result.filename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(result.blob);
+            await writable.close();
+          }
+
+          updateImage(image.id, (img) => ({ ...img, status: 'done' }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown processing error';
+          updateImage(image.id, (img) => ({ ...img, status: 'error', error: message }));
         }
 
-        setImages((prev) => prev.map((img) => (img.id === image.id ? { ...img, status: 'done' } : img)));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown processing error';
-        setImages((prev) =>
-          prev.map((img) => (img.id === image.id ? { ...img, status: 'error', error: message } : img))
-        );
+        setProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
+    };
 
-      setProgress((prev) => ({ ...prev, done: prev.done + 1 }));
-    }
+    await Promise.all(Array.from({ length: Math.min(concurrencyLimit, images.length) }, () => worker()));
 
     if (!directoryHandle) {
       const zip = new JSZip();
-      outputs.forEach((output) => zip.file(output.filename, output.blob));
+      outputs
+        .sort((a, b) => a.index - b.index)
+        .forEach((output) => {
+          zip.file(output.filename, output.blob);
+        });
       const blob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
@@ -501,6 +573,16 @@ function App() {
               <option value="contain">Contain</option>
               <option value="crop">Crop to fill</option>
             </select>
+          </label>
+
+          <label>
+            Contain background
+            <input
+              type="color"
+              value={options.backgroundColor}
+              onChange={(e) => setOptions((prev) => ({ ...prev, backgroundColor: e.target.value }))}
+              disabled={options.fitMode !== 'contain'}
+            />
           </label>
 
           <label>
@@ -608,7 +690,12 @@ function App() {
         {images.map((image) => (
           <article key={image.id} className="card">
             <div
-              className="thumb-wrap"
+              className={`thumb-wrap fit-${options.fitMode}`}
+              style={
+                options.fitMode === 'contain'
+                  ? ({ '--contain-bg': options.backgroundColor } as CSSProperties)
+                  : undefined
+              }
               onClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
                 const x = (event.clientX - rect.left) / rect.width;
@@ -616,7 +703,17 @@ function App() {
                 updateManualFocal(image.id, Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y)));
               }}
             >
-              <img src={image.previewUrl} alt={image.name} className="thumb" />
+              <img src={image.previewUrl} alt={image.name} className={`thumb thumb-${options.fitMode}`} />
+              {image.smartCropApplied && options.fitMode === 'crop' && <span className="smart-indicator">Smart</span>}
+              {image.autoFocalPoint && !image.manualFocalPoint && options.fitMode === 'crop' && (
+                <div
+                  className="focal-dot auto"
+                  style={{
+                    left: `${image.autoFocalPoint.x * 100}%`,
+                    top: `${image.autoFocalPoint.y * 100}%`
+                  }}
+                />
+              )}
               {image.manualFocalPoint && (
                 <div
                   className="focal-dot"
