@@ -387,13 +387,27 @@ function App() {
   const runProcessing = async (saveToFolder: boolean) => {
     setGlobalError(null);
     setIsProcessing(true);
-    setProgress({ done: 0, total: images.length });
-    setImages((prev) => prev.map((img) => ({ ...img, status: 'idle', error: undefined })));
 
     let directoryHandle: FileSystemDirectoryHandle | undefined;
     if (saveToFolder && supportsDirectoryPicker) {
-      directoryHandle = await (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker();
+      try {
+        directoryHandle = await (
+          window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }
+        ).showDirectoryPicker();
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          console.info('Folder selection cancelled by user.');
+          setProgress({ done: 0, total: 0 });
+          setIsProcessing(false);
+          return;
+        }
+
+        throw error;
+      }
     }
+
+    setProgress({ done: 0, total: images.length });
+    setImages((prev) => prev.map((img) => ({ ...img, status: 'idle', error: undefined })));
 
     const outputs: ProcessedImage[] = [];
 
@@ -573,6 +587,10 @@ function App() {
         >
           Process + Save to Folder
         </button>
+        <span className="hint">
+          Some system folders (such as Downloads) can be blocked by browser security. Create and select a new
+          export folder if needed.
+        </span>
         <button className="button secondary" disabled={isProcessing || images.length === 0} onClick={clearAllImages}>
           Clear All
         </button>
