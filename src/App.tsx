@@ -47,7 +47,7 @@ const supportsDirectoryPicker = typeof window !== 'undefined' && 'showDirectoryP
 const DEFAULT_OPTIONS: ProcessOptions = {
   width: 1200,
   height: 1200,
-  fitMode: 'contain',
+  fitMode: 'crop',
   backgroundColor: '#ffffff',
   useAutoFocal: true,
   format: 'original',
@@ -59,6 +59,13 @@ interface SizePreset {
   id: SizePresetId;
   label: string;
   dimensions?: { width: number; height: number };
+}
+
+interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const SIZE_PRESETS: SizePreset[] = [
@@ -284,43 +291,48 @@ function App() {
   };
 
   const drawCroppedSource = (
-    image: SourceImage,
     img: HTMLImageElement,
-    focalPoint: { x: number; y: number } | null
+    cropRect: CropRect
   ): HTMLCanvasElement => {
     const sourceCanvas = document.createElement('canvas');
-    const targetRatio = options.width / options.height;
-
-    let cropWidth = img.naturalWidth;
-    let cropHeight = img.naturalHeight;
-
-    if (img.naturalWidth / img.naturalHeight > targetRatio) {
-      cropWidth = Math.round(img.naturalHeight * targetRatio);
-    } else {
-      cropHeight = Math.round(img.naturalWidth / targetRatio);
-    }
-
-    let centerX = img.naturalWidth / 2;
-    let centerY = img.naturalHeight / 2;
-
-    if (image.manualFocalPoint) {
-      centerX = image.manualFocalPoint.x * img.naturalWidth;
-      centerY = image.manualFocalPoint.y * img.naturalHeight;
-    } else if (focalPoint) {
-      centerX = focalPoint.x * img.naturalWidth;
-      centerY = focalPoint.y * img.naturalHeight;
-    }
-
-    const x = Math.max(0, Math.min(img.naturalWidth - cropWidth, Math.round(centerX - cropWidth / 2)));
-    const y = Math.max(0, Math.min(img.naturalHeight - cropHeight, Math.round(centerY - cropHeight / 2)));
-
-    sourceCanvas.width = cropWidth;
-    sourceCanvas.height = cropHeight;
+    sourceCanvas.width = cropRect.width;
+    sourceCanvas.height = cropRect.height;
     const ctx = sourceCanvas.getContext('2d');
     if (!ctx) throw new Error('Cannot access canvas context.');
 
-    ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    ctx.drawImage(
+      img,
+      cropRect.x,
+      cropRect.y,
+      cropRect.width,
+      cropRect.height,
+      0,
+      0,
+      cropRect.width,
+      cropRect.height
+    );
     return sourceCanvas;
+  };
+
+  const getEffectiveFocalPoint = (image: SourceImage) => image.manualFocalPoint ?? image.autoFocalPoint ?? { x: 0.5, y: 0.5 };
+
+  const getCropRect = (sourceWidth: number, sourceHeight: number, focalPoint: { x: number; y: number }): CropRect => {
+    const targetRatio = options.width / options.height;
+    let cropWidth = sourceWidth;
+    let cropHeight = sourceHeight;
+
+    if (sourceWidth / sourceHeight > targetRatio) {
+      cropWidth = Math.round(sourceHeight * targetRatio);
+    } else {
+      cropHeight = Math.round(sourceWidth / targetRatio);
+    }
+
+    const centerX = focalPoint.x * sourceWidth;
+    const centerY = focalPoint.y * sourceHeight;
+    const x = Math.max(0, Math.min(sourceWidth - cropWidth, Math.round(centerX - cropWidth / 2)));
+    const y = Math.max(0, Math.min(sourceHeight - cropHeight, Math.round(centerY - cropHeight / 2)));
+
+    return { x, y, width: cropWidth, height: cropHeight };
   };
 
   const formatToMime = (format: OutputFormat, fallbackExt: string) => {
@@ -397,18 +409,12 @@ function App() {
       await pica.resize(loaded, tempCanvas);
       ctx.drawImage(tempCanvas, x, y);
     } else {
-      const targetRatio = options.width / options.height;
-      let cropWidth = loaded.naturalWidth;
-      let cropHeight = loaded.naturalHeight;
+      const initialCrop = getCropRect(loaded.naturalWidth, loaded.naturalHeight, { x: 0.5, y: 0.5 });
+      autoFocalPoint = await detectAutoFocalPoint(image, loaded, initialCrop.width, initialCrop.height);
+      const focalPoint = image.manualFocalPoint ?? autoFocalPoint ?? { x: 0.5, y: 0.5 };
+      const cropRect = getCropRect(loaded.naturalWidth, loaded.naturalHeight, focalPoint);
 
-      if (loaded.naturalWidth / loaded.naturalHeight > targetRatio) {
-        cropWidth = Math.round(loaded.naturalHeight * targetRatio);
-      } else {
-        cropHeight = Math.round(loaded.naturalWidth / targetRatio);
-      }
-
-      autoFocalPoint = await detectAutoFocalPoint(image, loaded, cropWidth, cropHeight);
-      tempCanvas = drawCroppedSource(image, loaded, autoFocalPoint);
+      tempCanvas = drawCroppedSource(loaded, cropRect);
       await pica.resize(tempCanvas, destinationCanvas);
       updateImage(image.id, (current) => ({
         ...current,
@@ -570,20 +576,32 @@ function App() {
               value={options.fitMode}
               onChange={(e) => setOptions((prev) => ({ ...prev, fitMode: e.target.value as FitMode }))}
             >
-              <option value="contain">Contain</option>
-              <option value="crop">Crop to fill</option>
+              <option value="crop">Crop to fill (fills the size and trims overflow)</option>
+              <option value="contain">Fit inside (shows the whole image)</option>
             </select>
           </label>
 
-          <label>
-            Contain background
-            <input
-              type="color"
-              value={options.backgroundColor}
-              onChange={(e) => setOptions((prev) => ({ ...prev, backgroundColor: e.target.value }))}
-              disabled={options.fitMode !== 'contain'}
-            />
-          </label>
+          {options.fitMode === 'contain' && (
+            <label>
+              Fit-inside background
+              <div className="contain-bg-control">
+                <select
+                  value={options.backgroundColor}
+                  onChange={(e) => setOptions((prev) => ({ ...prev, backgroundColor: e.target.value }))}
+                >
+                  <option value="#ffffff">White</option>
+                  <option value="transparent">Transparent</option>
+                  <option value="#000000">Black</option>
+                </select>
+                <span
+                  className={`bg-swatch ${options.backgroundColor === 'transparent' ? 'transparent' : ''}`}
+                  style={options.backgroundColor === 'transparent' ? undefined : { backgroundColor: options.backgroundColor }}
+                  aria-label={`Current contain background: ${options.backgroundColor}`}
+                  title={options.backgroundColor === 'transparent' ? 'Transparent' : options.backgroundColor}
+                />
+              </div>
+            </label>
+          )}
 
           <label>
             Output format
@@ -632,6 +650,7 @@ function App() {
             />
             Auto focal crop (smartcrop)
           </label>
+          <span className="hint">Crop to fill = fills the chosen size and may trim edges. Fit inside = shows the full image and may add background space.</span>
           <span className="hint">Pattern tokens: ORIGINAL-NAME, {'{n}'}, {'{nn}'}, {'{nnn}'}</span>
         </div>
       </section>
@@ -689,12 +708,24 @@ function App() {
       <section className="gallery">
         {images.map((image) => (
           <article key={image.id} className="card">
+            {(() => {
+              const focal = getEffectiveFocalPoint(image);
+              const cropRect = getCropRect(image.dimensions.width, image.dimensions.height, focal);
+              const cropPreviewStyle: CSSProperties = {
+                width: `${(image.dimensions.width / cropRect.width) * 100}%`,
+                height: `${(image.dimensions.height / cropRect.height) * 100}%`,
+                left: `${(-cropRect.x / cropRect.width) * 100}%`,
+                top: `${(-cropRect.y / cropRect.height) * 100}%`
+              };
+
+              return (
             <div
               className={`thumb-wrap fit-${options.fitMode}`}
               style={
-                options.fitMode === 'contain'
-                  ? ({ '--contain-bg': options.backgroundColor } as CSSProperties)
-                  : undefined
+                {
+                  '--contain-bg': options.backgroundColor,
+                  aspectRatio: `${options.width} / ${options.height}`
+                } as CSSProperties
               }
               onClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
@@ -703,7 +734,11 @@ function App() {
                 updateManualFocal(image.id, Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y)));
               }}
             >
-              <img src={image.previewUrl} alt={image.name} className={`thumb thumb-${options.fitMode}`} />
+              {options.fitMode === 'contain' ? (
+                <img src={image.previewUrl} alt={image.name} className="thumb thumb-contain" />
+              ) : (
+                <img src={image.previewUrl} alt={image.name} className="thumb thumb-crop-exact" style={cropPreviewStyle} />
+              )}
               {image.smartCropApplied && options.fitMode === 'crop' && <span className="smart-indicator">Smart</span>}
               {image.autoFocalPoint && !image.manualFocalPoint && options.fitMode === 'crop' && (
                 <div
@@ -724,6 +759,8 @@ function App() {
                 />
               )}
             </div>
+              );
+            })()}
             <div className="meta">
               <strong>{image.file.name}</strong>
               <small>
