@@ -7,6 +7,7 @@ A fast internal ecommerce-oriented bulk image resizer built with **React + TypeS
 - Drag-and-drop or file picker for multiple images
 - Thumbnail preview gallery
 - Batch resizing by explicit width/height
+- Reusable size presets (includes **Custom** and **PLP Square (1000x1000)**)
 - Fit modes:
   - **Contain** (letterbox inside target size)
   - **Crop to fill** (fills target size)
@@ -52,7 +53,7 @@ npm run build
 ## Usage notes
 
 1. Drop images into the dropzone.
-2. Set width/height and fit mode.
+2. Choose a size preset (or leave on **Custom**), then adjust width/height and fit mode.
 3. Optionally enable auto focal crop (best for crop-to-fill mode).
 4. Click a thumbnail to set a manual focal point override for that image.
 5. Choose output format, quality, and filename pattern.
@@ -65,6 +66,14 @@ npm run build
 - `ORIGINAL-NAME-{nnn}` → `shirt-front-001.jpg`
 - `catalog-{nn}` → `catalog-01.webp`
 - `ORIGINAL-NAME-{n}` → `shoe-hero-1.avif`
+
+### Size presets
+
+- Select **PLP Square (1000x1000)** to auto-fill the width/height fields for common ecommerce product listing needs.
+- Select **Custom** for manual dimensions.
+- If you manually edit width or height, the preset automatically switches back to **Custom**.
+- The last selected preset is persisted in `localStorage` and restored on next visit.
+- Presets only control dimensions; **Fit mode** remains independent.
 
 ## Browser compatibility
 

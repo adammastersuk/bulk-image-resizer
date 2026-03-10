@@ -1,11 +1,12 @@
 import Pica from 'pica';
 import JSZip from 'jszip';
 import Smartcrop from 'smartcrop';
-import { ChangeEvent, DragEvent, useMemo, useState } from 'react';
+import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from 'react';
 
 type FitMode = 'contain' | 'crop';
 type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
 type ItemStatus = 'idle' | 'processing' | 'done' | 'error';
+type SizePresetId = 'custom' | 'plp-square';
 
 interface SourceImage {
   id: string;
@@ -48,9 +49,23 @@ const DEFAULT_OPTIONS: ProcessOptions = {
   renamePattern: 'ORIGINAL-NAME-{nnn}'
 };
 
+interface SizePreset {
+  id: SizePresetId;
+  label: string;
+  dimensions?: { width: number; height: number };
+}
+
+const SIZE_PRESETS: SizePreset[] = [
+  { id: 'custom', label: 'Custom' },
+  { id: 'plp-square', label: 'PLP Square (1000x1000)', dimensions: { width: 1000, height: 1000 } }
+];
+
+const PRESET_STORAGE_KEY = 'bulk-image-resizer:size-preset';
+
 function App() {
   const [images, setImages] = useState<SourceImage[]>([]);
   const [options, setOptions] = useState<ProcessOptions>(DEFAULT_OPTIONS);
+  const [selectedPreset, setSelectedPreset] = useState<SizePresetId>('custom');
   const [dragOver, setDragOver] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -62,6 +77,38 @@ function App() {
     () => images.length > 0 && options.width > 0 && options.height > 0 && !isProcessing,
     [images.length, options.width, options.height, isProcessing]
   );
+
+  useEffect(() => {
+    const savedPreset = localStorage.getItem(PRESET_STORAGE_KEY);
+    if (savedPreset !== 'custom' && savedPreset !== 'plp-square') {
+      return;
+    }
+
+    setSelectedPreset(savedPreset);
+    const preset = SIZE_PRESETS.find((item) => item.id === savedPreset);
+    if (preset?.dimensions) {
+      setOptions((prev) => ({ ...prev, ...preset.dimensions }));
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(PRESET_STORAGE_KEY, selectedPreset);
+  }, [selectedPreset]);
+
+  const onPresetChange = (presetId: SizePresetId) => {
+    setSelectedPreset(presetId);
+    const preset = SIZE_PRESETS.find((item) => item.id === presetId);
+    if (!preset?.dimensions) {
+      return;
+    }
+
+    setOptions((prev) => ({ ...prev, ...preset.dimensions }));
+  };
+
+  const onDimensionChange = (dimension: 'width' | 'height', value: number) => {
+    setOptions((prev) => ({ ...prev, [dimension]: value || 1 }));
+    setSelectedPreset('custom');
+  };
 
   const addFiles = (files: FileList | File[]) => {
     const incoming = Array.from(files).filter((f) => f.type.startsWith('image/'));
@@ -325,12 +372,23 @@ function App() {
       <section className="panel controls">
         <div className="grid">
           <label>
+            Size preset
+            <select value={selectedPreset} onChange={(e) => onPresetChange(e.target.value as SizePresetId)}>
+              {SIZE_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
             Width
             <input
               type="number"
               min={1}
               value={options.width}
-              onChange={(e) => setOptions((prev) => ({ ...prev, width: Number(e.target.value) || 1 }))}
+              onChange={(e) => onDimensionChange('width', Number(e.target.value))}
             />
           </label>
 
@@ -340,7 +398,7 @@ function App() {
               type="number"
               min={1}
               value={options.height}
-              onChange={(e) => setOptions((prev) => ({ ...prev, height: Number(e.target.value) || 1 }))}
+              onChange={(e) => onDimensionChange('height', Number(e.target.value))}
             />
           </label>
 
