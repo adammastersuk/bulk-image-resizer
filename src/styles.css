@@ -13,6 +13,43 @@ body { margin: 0; }
   padding: 16px;
 }
 
+.tool-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.suite-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.suite-header h1 { margin: 0 0 4px; }
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tab {
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  color: #1f2937;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tab.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
