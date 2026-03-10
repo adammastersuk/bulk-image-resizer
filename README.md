@@ -5,12 +5,13 @@ A fast internal ecommerce-oriented bulk image resizer built with **React + TypeS
 ## Features
 
 - Drag-and-drop or file picker for multiple images
-- Thumbnail preview gallery
+- Preview gallery that mirrors the final exported composition (crop area or fit-inside letterboxing)
 - Batch resizing by explicit width/height
 - Reusable size presets (includes **Custom** and **PLP Square (1000x1000)**)
 - Fit modes:
-  - **Contain** keeps the full image visible inside the target size and fills any remaining area with a configurable background color (white by default).
-  - **Crop to fill** always fills the target dimensions exactly, cropping overflow and centering by default (or using smart/manual focal points).
+  - **Crop to fill (fills the size and trims overflow)** always fills the target dimensions exactly, trimming edges when needed and using smart/manual focal points.
+  - **Fit inside (shows the whole image)** keeps the full image visible inside the target size and can add background space (white, transparent, or black).
+- Default fit mode is **Crop to fill** for ecommerce-first prep workflows.
 - Cropping controls:
   - Optional **auto focal point** (via `smartcrop`)
   - **Manual focal override** per image by clicking on the thumbnail
@@ -55,11 +56,12 @@ npm run build
 
 1. Drop images into the dropzone.
 2. Choose a size preset (or leave on **Custom**), then adjust width/height and fit mode.
-3. For **Contain**, optionally pick the background fill color used for letterboxing.
-4. For **Crop to fill**, optionally enable auto focal crop (Smartcrop) to suggest a focal point.
-5. Click a thumbnail to set a manual focal point override for that image (manual override always wins over auto focal).
-6. Choose output format, quality, and filename pattern.
-7. Process:
+3. **Crop to fill** is the default and is best when you need the export frame fully filled (edges may be trimmed).
+4. Switch to **Fit inside** to preserve the full image and choose a letterbox background (white, transparent, or black).
+5. For **Crop to fill**, optionally enable auto focal crop (Smartcrop) to suggest a focal point.
+6. Click a preview card to set a manual focal point override for that image (manual override always wins over auto focal).
+7. Choose output format, quality, and filename pattern.
+8. Process:
    - **Process + Download ZIP** (default)
    - **Process + Save to Folder** (if browser supports `showDirectoryPicker`)
 
