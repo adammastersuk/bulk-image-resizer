@@ -705,8 +705,16 @@ function App() {
 
       <div className="workspace">
         <main className="workspace-main">
+          <input
+            id="picker"
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp,.avif,.gif,.bmp,.tif,.tiff,.svg,image/jpeg,image/png,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/svg+xml"
+            multiple
+            onChange={onFileInput}
+          />
+
           <section
-            className={`panel dropzone ${dragOver ? 'active' : ''} ${images.length > 0 ? 'compact' : 'prominent'}`}
+            className={`panel workspace-canvas dropzone ${dragOver ? 'active' : ''} ${images.length > 0 ? 'populated' : 'empty'}`}
             onDrop={onDrop}
             onDragOver={(e) => {
               e.preventDefault();
@@ -714,32 +722,23 @@ function App() {
             }}
             onDragLeave={() => setDragOver(false)}
           >
-            <p>{images.length > 0 ? 'Drop more images anywhere in this bar to add to your batch.' : 'Drag & drop images to begin your workspace.'}</p>
-            <input
-              id="picker"
-              type="file"
-              accept=".jpg,.jpeg,.png,.webp,.avif,.gif,.bmp,.tif,.tiff,.svg,image/jpeg,image/png,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/svg+xml"
-              multiple
-              onChange={onFileInput}
-            />
-            {images.length === 0 && (
-              <label htmlFor="picker" className="button secondary">
-                Select Images
-              </label>
-            )}
-            {images.length > 0 && (
+            <div className={`canvas-overlay ${images.length > 0 ? 'subtle' : ''}`}>
+              <p>
+                {images.length > 0
+                  ? 'Drop more images anywhere in the workspace canvas to add to your batch.'
+                  : 'Drag & drop images to begin your workspace.'}
+              </p>
               <label htmlFor="picker" className="button secondary compact-picker-button">
                 Select Images
               </label>
+            </div>
+
+            {images.length > 0 && options.fitMode === 'crop' && (
+              <p className="workspace-instruction hint">Click a tile, then drag to adjust crop inline.</p>
             )}
-          </section>
 
-          {options.fitMode === 'crop' && images.length > 0 && (
-            <p className="workspace-instruction hint">Click a tile, then drag to adjust crop inline.</p>
-          )}
-
-          <section className="gallery">
-            {images.map((image) => {
+            <section className="gallery">
+              {images.map((image) => {
               const focal = getEffectiveFocalPoint(image);
               const cropRect = image.manualCropOverride
                 ? getCropRectFromOverride(image.dimensions.width, image.dimensions.height, image.manualCropOverride)
@@ -897,7 +896,8 @@ function App() {
                   </div>
                 </article>
               );
-            })}
+              })}
+            </section>
           </section>
         </main>
 
