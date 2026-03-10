@@ -1,7 +1,7 @@
 import Pica from 'pica';
 import JSZip from 'jszip';
 import Smartcrop from 'smartcrop';
-import { CSSProperties, ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, ChangeEvent, DragEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type FitMode = 'contain' | 'crop';
 type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
@@ -16,6 +16,7 @@ interface SourceImage {
   previewUrl: string;
   dimensions: { width: number; height: number };
   manualFocalPoint?: { x: number; y: number };
+  manualCropOverride?: { x: number; y: number };
   autoFocalPoint?: { x: number; y: number };
   smartCropApplied?: boolean;
   status: ItemStatus;
@@ -95,6 +96,10 @@ function App() {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
   const imageUrlsRef = useRef<string[]>([]);
+  const cropEditorFrameRef = useRef<HTMLDivElement | null>(null);
+  const [editingImageId, setEditingImageId] = useState<string | null>(null);
+  const [editorCropRect, setEditorCropRect] = useState<CropRect | null>(null);
+  const dragStateRef = useRef<{ startX: number; startY: number; origin: CropRect } | null>(null);
 
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
 
@@ -249,8 +254,8 @@ function App() {
     setImages((prev) => prev.map((img) => (img.id === id ? updater(img) : img)));
   };
 
-  const updateManualFocal = (id: string, x: number, y: number) => {
-    updateImage(id, (img) => ({ ...img, manualFocalPoint: { x, y }, smartCropApplied: false }));
+  const clearManualCropOverride = (id: string) => {
+    updateImage(id, (img) => ({ ...img, manualCropOverride: undefined }));
   };
 
   const loadImage = (file: Blob): Promise<HTMLImageElement> =>
@@ -274,7 +279,7 @@ function App() {
     cropWidth: number,
     cropHeight: number
   ): Promise<{ x: number; y: number } | null> => {
-    if (!options.useAutoFocal || image.manualFocalPoint) {
+    if (!options.useAutoFocal || image.manualFocalPoint || image.manualCropOverride) {
       return null;
     }
 
@@ -333,6 +338,99 @@ function App() {
     const y = Math.max(0, Math.min(sourceHeight - cropHeight, Math.round(centerY - cropHeight / 2)));
 
     return { x, y, width: cropWidth, height: cropHeight };
+  };
+
+  const getCropRectFromOverride = (
+    sourceWidth: number,
+    sourceHeight: number,
+    override: { x: number; y: number }
+  ): CropRect => {
+    const centered = getCropRect(sourceWidth, sourceHeight, { x: 0.5, y: 0.5 });
+    const maxX = sourceWidth - centered.width;
+    const maxY = sourceHeight - centered.height;
+    return {
+      ...centered,
+      x: Math.max(0, Math.min(maxX, Math.round(override.x * sourceWidth))),
+      y: Math.max(0, Math.min(maxY, Math.round(override.y * sourceHeight)))
+    };
+  };
+
+  const getEffectiveCropRect = (image: SourceImage, sourceWidth: number, sourceHeight: number) => {
+    if (image.manualCropOverride) {
+      return getCropRectFromOverride(sourceWidth, sourceHeight, image.manualCropOverride);
+    }
+
+    const focalPoint = getEffectiveFocalPoint(image);
+    return getCropRect(sourceWidth, sourceHeight, focalPoint);
+  };
+
+  const openCropEditor = (image: SourceImage) => {
+    if (options.fitMode !== 'crop') {
+      return;
+    }
+    setEditingImageId(image.id);
+    setEditorCropRect(getEffectiveCropRect(image, image.dimensions.width, image.dimensions.height));
+  };
+
+  const closeCropEditor = () => {
+    setEditingImageId(null);
+    setEditorCropRect(null);
+    dragStateRef.current = null;
+  };
+
+  const onCropDragStart = (event: PointerEvent<HTMLDivElement>) => {
+    if (!editorCropRect || !cropEditorFrameRef.current) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStateRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: editorCropRect
+    };
+  };
+
+  const onCropDragMove = (event: PointerEvent<HTMLDivElement>, image: SourceImage) => {
+    if (!dragStateRef.current || !cropEditorFrameRef.current) {
+      return;
+    }
+    const frameRect = cropEditorFrameRef.current.getBoundingClientRect();
+    if (!frameRect.width || !frameRect.height) {
+      return;
+    }
+
+    const dx = event.clientX - dragStateRef.current.startX;
+    const dy = event.clientY - dragStateRef.current.startY;
+
+    const sourceDeltaX = (dx / frameRect.width) * dragStateRef.current.origin.width;
+    const sourceDeltaY = (dy / frameRect.height) * dragStateRef.current.origin.height;
+    const maxX = image.dimensions.width - dragStateRef.current.origin.width;
+    const maxY = image.dimensions.height - dragStateRef.current.origin.height;
+
+    setEditorCropRect({
+      ...dragStateRef.current.origin,
+      x: Math.max(0, Math.min(maxX, Math.round(dragStateRef.current.origin.x - sourceDeltaX))),
+      y: Math.max(0, Math.min(maxY, Math.round(dragStateRef.current.origin.y - sourceDeltaY)))
+    });
+  };
+
+  const onCropDragEnd = (event: PointerEvent<HTMLDivElement>, image: SourceImage) => {
+    if (!editorCropRect) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStateRef.current = null;
+
+    updateImage(image.id, (current) => ({
+      ...current,
+      manualCropOverride: {
+        x: editorCropRect.x / current.dimensions.width,
+        y: editorCropRect.y / current.dimensions.height
+      },
+      smartCropApplied: false
+    }));
   };
 
   const formatToMime = (format: OutputFormat, fallbackExt: string) => {
@@ -411,15 +509,16 @@ function App() {
     } else {
       const initialCrop = getCropRect(loaded.naturalWidth, loaded.naturalHeight, { x: 0.5, y: 0.5 });
       autoFocalPoint = await detectAutoFocalPoint(image, loaded, initialCrop.width, initialCrop.height);
-      const focalPoint = image.manualFocalPoint ?? autoFocalPoint ?? { x: 0.5, y: 0.5 };
-      const cropRect = getCropRect(loaded.naturalWidth, loaded.naturalHeight, focalPoint);
+      const cropRect = image.manualCropOverride
+        ? getCropRectFromOverride(loaded.naturalWidth, loaded.naturalHeight, image.manualCropOverride)
+        : getCropRect(loaded.naturalWidth, loaded.naturalHeight, image.manualFocalPoint ?? autoFocalPoint ?? { x: 0.5, y: 0.5 });
 
       tempCanvas = drawCroppedSource(loaded, cropRect);
       await pica.resize(tempCanvas, destinationCanvas);
       updateImage(image.id, (current) => ({
         ...current,
         autoFocalPoint: autoFocalPoint ?? undefined,
-        smartCropApplied: !current.manualFocalPoint && Boolean(autoFocalPoint)
+        smartCropApplied: !current.manualFocalPoint && !current.manualCropOverride && Boolean(autoFocalPoint)
       }));
     }
 
@@ -710,7 +809,9 @@ function App() {
           <article key={image.id} className="card">
             {(() => {
               const focal = getEffectiveFocalPoint(image);
-              const cropRect = getCropRect(image.dimensions.width, image.dimensions.height, focal);
+              const cropRect = image.manualCropOverride
+                ? getCropRectFromOverride(image.dimensions.width, image.dimensions.height, image.manualCropOverride)
+                : getCropRect(image.dimensions.width, image.dimensions.height, focal);
               const cropPreviewStyle: CSSProperties = {
                 width: `${(image.dimensions.width / cropRect.width) * 100}%`,
                 height: `${(image.dimensions.height / cropRect.height) * 100}%`,
@@ -719,46 +820,46 @@ function App() {
               };
 
               return (
-            <div
-              className={`thumb-wrap fit-${options.fitMode}`}
-              style={
-                {
-                  '--contain-bg': options.backgroundColor,
-                  aspectRatio: `${options.width} / ${options.height}`
-                } as CSSProperties
-              }
-              onClick={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const x = (event.clientX - rect.left) / rect.width;
-                const y = (event.clientY - rect.top) / rect.height;
-                updateManualFocal(image.id, Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y)));
-              }}
-            >
-              {options.fitMode === 'contain' ? (
-                <img src={image.previewUrl} alt={image.name} className="thumb thumb-contain" />
-              ) : (
-                <img src={image.previewUrl} alt={image.name} className="thumb thumb-crop-exact" style={cropPreviewStyle} />
-              )}
-              {image.smartCropApplied && options.fitMode === 'crop' && <span className="smart-indicator">Smart</span>}
-              {image.autoFocalPoint && !image.manualFocalPoint && options.fitMode === 'crop' && (
                 <div
-                  className="focal-dot auto"
-                  style={{
-                    left: `${image.autoFocalPoint.x * 100}%`,
-                    top: `${image.autoFocalPoint.y * 100}%`
+                  className={`thumb-wrap fit-${options.fitMode}`}
+                  style={
+                    {
+                      '--contain-bg': options.backgroundColor,
+                      aspectRatio: `${options.width} / ${options.height}`
+                    } as CSSProperties
+                  }
+                  onClick={() => {
+                    if (options.fitMode === 'crop') {
+                      openCropEditor(image);
+                    }
                   }}
-                />
-              )}
-              {image.manualFocalPoint && (
-                <div
-                  className="focal-dot"
-                  style={{
-                    left: `${image.manualFocalPoint.x * 100}%`,
-                    top: `${image.manualFocalPoint.y * 100}%`
-                  }}
-                />
-              )}
-            </div>
+                >
+                  {options.fitMode === 'contain' ? (
+                    <img src={image.previewUrl} alt={image.name} className="thumb thumb-contain" />
+                  ) : (
+                    <img src={image.previewUrl} alt={image.name} className="thumb thumb-crop-exact" style={cropPreviewStyle} />
+                  )}
+                  {image.manualCropOverride && options.fitMode === 'crop' && <span className="manual-indicator">Manual</span>}
+                  {image.smartCropApplied && options.fitMode === 'crop' && <span className="smart-indicator">Smart</span>}
+                  {image.autoFocalPoint && !image.manualFocalPoint && options.fitMode === 'crop' && (
+                    <div
+                      className="focal-dot auto"
+                      style={{
+                        left: `${image.autoFocalPoint.x * 100}%`,
+                        top: `${image.autoFocalPoint.y * 100}%`
+                      }}
+                    />
+                  )}
+                  {image.manualFocalPoint && (
+                    <div
+                      className="focal-dot"
+                      style={{
+                        left: `${image.manualFocalPoint.x * 100}%`,
+                        top: `${image.manualFocalPoint.y * 100}%`
+                      }}
+                    />
+                  )}
+                </div>
               );
             })()}
             <div className="meta">
@@ -773,9 +874,63 @@ function App() {
             <button className="link" onClick={() => removeImage(image.id)} disabled={isProcessing}>
               Remove
             </button>
+            {image.manualCropOverride && (
+              <button className="link" onClick={() => clearManualCropOverride(image.id)} disabled={isProcessing}>
+                Reset manual crop
+              </button>
+            )}
           </article>
         ))}
       </section>
+
+      {editingImageId && editorCropRect && options.fitMode === 'crop' && (() => {
+        const image = images.find((item) => item.id === editingImageId);
+        if (!image) {
+          return null;
+        }
+
+        const editorImageStyle: CSSProperties = {
+          width: `${(image.dimensions.width / editorCropRect.width) * 100}%`,
+          height: `${(image.dimensions.height / editorCropRect.height) * 100}%`,
+          left: `${(-editorCropRect.x / editorCropRect.width) * 100}%`,
+          top: `${(-editorCropRect.y / editorCropRect.height) * 100}%`
+        };
+
+        return (
+          <div className="crop-editor-overlay" onClick={closeCropEditor}>
+            <div className="crop-editor" onClick={(event) => event.stopPropagation()}>
+              <div className="crop-editor-header">
+                <strong>{image.file.name}</strong>
+                <button className="link" onClick={closeCropEditor}>Close</button>
+              </div>
+              <p className="hint">Drag image to set crop. Frame ratio is {options.width}:{options.height}.</p>
+              <div
+                ref={cropEditorFrameRef}
+                className="crop-editor-frame"
+                style={{ aspectRatio: `${options.width} / ${options.height}` }}
+                onPointerDown={onCropDragStart}
+                onPointerMove={(event) => onCropDragMove(event, image)}
+                onPointerUp={(event) => onCropDragEnd(event, image)}
+                onPointerCancel={(event) => onCropDragEnd(event, image)}
+              >
+                <img src={image.previewUrl} alt={image.name} className="crop-editor-image" style={editorImageStyle} draggable={false} />
+              </div>
+              <div className="crop-editor-actions">
+                <button
+                  className="button secondary"
+                  onClick={() => {
+                    clearManualCropOverride(image.id);
+                    setEditorCropRect(getCropRect(image.dimensions.width, image.dimensions.height, getEffectiveFocalPoint(image)));
+                  }}
+                >
+                  Reset to auto/center
+                </button>
+                <button className="button" onClick={closeCropEditor}>Done</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
