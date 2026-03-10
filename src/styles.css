@@ -65,7 +65,7 @@ input[type='file'] { display: none; }
 
 .actions {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto auto 1fr auto;
   align-items: center;
   gap: 10px;
 }

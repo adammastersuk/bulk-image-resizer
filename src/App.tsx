@@ -1,7 +1,7 @@
 import Pica from 'pica';
 import JSZip from 'jszip';
 import Smartcrop from 'smartcrop';
-import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type FitMode = 'contain' | 'crop';
 type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
@@ -14,6 +14,7 @@ interface SourceImage {
   name: string;
   ext: string;
   previewUrl: string;
+  dimensions: { width: number; height: number };
   manualFocalPoint?: { x: number; y: number };
   status: ItemStatus;
   error?: string;
@@ -61,6 +62,17 @@ const SIZE_PRESETS: SizePreset[] = [
 ];
 
 const PRESET_STORAGE_KEY = 'bulk-image-resizer:size-preset';
+const ACCEPTED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+  'image/gif',
+  'image/bmp',
+  'image/tiff',
+  'image/svg+xml'
+]);
+const ACCEPTED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'bmp', 'tif', 'tiff', 'svg']);
 
 function App() {
   const [images, setImages] = useState<SourceImage[]>([]);
@@ -70,6 +82,7 @@ function App() {
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
+  const imageUrlsRef = useRef<string[]>([]);
 
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
 
@@ -95,6 +108,17 @@ function App() {
     localStorage.setItem(PRESET_STORAGE_KEY, selectedPreset);
   }, [selectedPreset]);
 
+  useEffect(() => {
+    imageUrlsRef.current = images.map((image) => image.previewUrl);
+  }, [images]);
+
+  useEffect(
+    () => () => {
+      imageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    },
+    []
+  );
+
   const onPresetChange = (presetId: SizePresetId) => {
     setSelectedPreset(presetId);
     const preset = SIZE_PRESETS.find((item) => item.id === presetId);
@@ -110,43 +134,95 @@ function App() {
     setSelectedPreset('custom');
   };
 
-  const addFiles = (files: FileList | File[]) => {
-    const incoming = Array.from(files).filter((f) => f.type.startsWith('image/'));
+  const getImageDimensions = (file: File): Promise<{ width: number; height: number }> =>
+    new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error(`Could not read dimensions for ${file.name}`));
+      };
+      img.src = objectUrl;
+    });
+
+  const isAcceptedImageFile = (file: File) => {
+    if (ACCEPTED_IMAGE_MIME_TYPES.has(file.type)) {
+      return true;
+    }
+
+    const ext = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() ?? '' : '';
+    return ACCEPTED_IMAGE_EXTENSIONS.has(ext);
+  };
+
+  const addFiles = async (files: FileList | File[]) => {
+    const incoming = Array.from(files).filter((f) => isAcceptedImageFile(f));
     if (!incoming.length) {
-      setGlobalError('No valid images were found. Please drop or select image files.');
+      setGlobalError('No valid images were found. Please choose common image formats (JPEG, PNG, WebP, AVIF, GIF, BMP, TIFF, SVG).');
       return;
     }
 
-    const newItems = incoming.map((file) => {
-      const ext = file.name.includes('.') ? file.name.split('.').pop() ?? 'png' : 'png';
-      return {
-        id: crypto.randomUUID(),
-        file,
-        name: file.name.replace(/\.[^/.]+$/, ''),
-        ext: ext.toLowerCase(),
-        previewUrl: URL.createObjectURL(file),
-        status: 'idle' as ItemStatus
-      };
-    });
+    const settledItems = await Promise.allSettled(
+      incoming.map(async (file): Promise<SourceImage> => {
+        const dimensions = await getImageDimensions(file);
+        const ext = file.name.includes('.') ? file.name.split('.').pop() ?? 'png' : 'png';
+
+        return {
+          id: crypto.randomUUID(),
+          file,
+          name: file.name.replace(/\.[^/.]+$/, ''),
+          ext: ext.toLowerCase(),
+          previewUrl: URL.createObjectURL(file),
+          dimensions,
+          status: 'idle'
+        };
+      })
+    );
+
+    const newItems = settledItems.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+    const rejectedCount = settledItems.length - newItems.length;
+
+    if (!newItems.length) {
+      setGlobalError('Unable to load image previews. Please try different files.');
+      return;
+    }
 
     setImages((prev) => [...prev, ...newItems]);
-    setGlobalError(null);
+    setGlobalError(
+      rejectedCount > 0 ? `Skipped ${rejectedCount} image${rejectedCount === 1 ? '' : 's'} that could not be read.` : null
+    );
   };
 
-  const onFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+  const onFileInput = async (event: ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files) {
       return;
     }
-    addFiles(event.target.files);
+    await addFiles(event.target.files);
     event.target.value = '';
   };
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragOver(false);
     if (event.dataTransfer.files) {
-      addFiles(event.dataTransfer.files);
+      await addFiles(event.dataTransfer.files);
     }
+  };
+
+  const clearAllImages = () => {
+    setImages((prev) => {
+      prev.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      return [];
+    });
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
   };
 
   const removeImage = (id: string) => {
@@ -474,7 +550,13 @@ function App() {
         onDragLeave={() => setDragOver(false)}
       >
         <p>Drag & drop images here, or use file picker.</p>
-        <input id="picker" type="file" accept="image/*" multiple onChange={onFileInput} />
+        <input
+          id="picker"
+          type="file"
+          accept=".jpg,.jpeg,.png,.webp,.avif,.gif,.bmp,.tif,.tiff,.svg,image/jpeg,image/png,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/svg+xml"
+          multiple
+          onChange={onFileInput}
+        />
         <label htmlFor="picker" className="button secondary">
           Select Images
         </label>
@@ -490,6 +572,9 @@ function App() {
           onClick={() => runProcessing(true)}
         >
           Process + Save to Folder
+        </button>
+        <button className="button secondary" disabled={isProcessing || images.length === 0} onClick={clearAllImages}>
+          Clear All
         </button>
         <div className="progress">
           <div className="bar" style={{ width: `${progressPct}%` }} />
@@ -526,6 +611,10 @@ function App() {
             </div>
             <div className="meta">
               <strong>{image.file.name}</strong>
+              <small>
+                Original: {image.dimensions.width} × {image.dimensions.height}
+              </small>
+              <small>Size: {formatFileSize(image.file.size)}</small>
               <small>Status: {image.status}</small>
               {image.error && <small className="error">{image.error}</small>}
             </div>
