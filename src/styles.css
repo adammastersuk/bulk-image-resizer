@@ -139,10 +139,15 @@ input[type='file'] { display: none; }
 }
 
 .canvas-overlay.subtle {
+  position: relative;
+  inset: auto;
+  z-index: 2;
   justify-content: flex-start;
   align-items: flex-start;
   text-align: left;
   gap: 8px;
+  padding: 0;
+  pointer-events: auto;
 }
 
 .canvas-overlay.subtle p {
@@ -184,7 +189,7 @@ input[type='file'] { display: none; }
 }
 
 .workspace-canvas.populated .gallery {
-  margin-top: 56px;
+  margin-top: 0;
 }
 
 .dropzone.active {
