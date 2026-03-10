@@ -99,6 +99,7 @@ function App() {
   const cropEditorFrameRef = useRef<HTMLDivElement | null>(null);
   const [editingImageId, setEditingImageId] = useState<string | null>(null);
   const [editorCropRect, setEditorCropRect] = useState<CropRect | null>(null);
+  const [isDraggingCrop, setIsDraggingCrop] = useState(false);
   const dragStateRef = useRef<{ startX: number; startY: number; origin: CropRect } | null>(null);
 
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
@@ -364,7 +365,7 @@ function App() {
     return getCropRect(sourceWidth, sourceHeight, focalPoint);
   };
 
-  const openCropEditor = (image: SourceImage) => {
+  const enableInlineCropEditing = (image: SourceImage) => {
     if (options.fitMode !== 'crop') {
       return;
     }
@@ -372,9 +373,10 @@ function App() {
     setEditorCropRect(getEffectiveCropRect(image, image.dimensions.width, image.dimensions.height));
   };
 
-  const closeCropEditor = () => {
+  const disableInlineCropEditing = () => {
     setEditingImageId(null);
     setEditorCropRect(null);
+    setIsDraggingCrop(false);
     dragStateRef.current = null;
   };
 
@@ -383,6 +385,7 @@ function App() {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    setIsDraggingCrop(true);
     dragStateRef.current = {
       startX: event.clientX,
       startY: event.clientY,
@@ -421,6 +424,7 @@ function App() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    setIsDraggingCrop(false);
     dragStateRef.current = null;
 
     updateImage(image.id, (current) => ({
@@ -631,306 +635,327 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header>
-        <h1>Bulk Image Resizer</h1>
-        <p>Local-only ecommerce image processing. No uploads, no server, fast batch workflow.</p>
-      </header>
-
-      <section className="panel controls">
-        <div className="grid">
-          <label>
-            Size preset
-            <select value={selectedPreset} onChange={(e) => onPresetChange(e.target.value as SizePresetId)}>
-              {SIZE_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Width
-            <input
-              type="number"
-              min={1}
-              value={options.width}
-              onChange={(e) => onDimensionChange('width', Number(e.target.value))}
-            />
-          </label>
-
-          <label>
-            Height
-            <input
-              type="number"
-              min={1}
-              value={options.height}
-              onChange={(e) => onDimensionChange('height', Number(e.target.value))}
-            />
-          </label>
-
-          <label>
-            Fit mode
-            <select
-              value={options.fitMode}
-              onChange={(e) => setOptions((prev) => ({ ...prev, fitMode: e.target.value as FitMode }))}
-            >
-              <option value="crop">Crop to fill (fills the size and trims overflow)</option>
-              <option value="contain">Fit inside (shows the whole image)</option>
-            </select>
-          </label>
-
-          {options.fitMode === 'contain' && (
-            <label>
-              Fit-inside background
-              <div className="contain-bg-control">
-                <select
-                  value={options.backgroundColor}
-                  onChange={(e) => setOptions((prev) => ({ ...prev, backgroundColor: e.target.value }))}
-                >
-                  <option value="#ffffff">White</option>
-                  <option value="transparent">Transparent</option>
-                  <option value="#000000">Black</option>
-                </select>
-                <span
-                  className={`bg-swatch ${options.backgroundColor === 'transparent' ? 'transparent' : ''}`}
-                  style={options.backgroundColor === 'transparent' ? undefined : { backgroundColor: options.backgroundColor }}
-                  aria-label={`Current contain background: ${options.backgroundColor}`}
-                  title={options.backgroundColor === 'transparent' ? 'Transparent' : options.backgroundColor}
-                />
-              </div>
-            </label>
-          )}
-
-          <label>
-            Output format
-            <select
-              value={options.format}
-              onChange={(e) => setOptions((prev) => ({ ...prev, format: e.target.value as OutputFormat }))}
-            >
-              <option value="original">Original</option>
-              <option value="jpeg">JPEG</option>
-              <option value="webp">WebP</option>
-              <option value="avif">AVIF</option>
-            </select>
-          </label>
-
-          <label>
-            Quality ({Math.round(options.quality * 100)})
-            <input
-              type="range"
-              min={0.1}
-              max={1}
-              step={0.05}
-              value={options.quality}
-              onChange={(e) => setOptions((prev) => ({ ...prev, quality: Number(e.target.value) }))}
-              disabled={options.format === 'original'}
-            />
-          </label>
-
-          <label>
-            Rename pattern
-            <input
-              type="text"
-              value={options.renamePattern}
-              onChange={(e) => setOptions((prev) => ({ ...prev, renamePattern: e.target.value }))}
-              placeholder="ORIGINAL-NAME-{nnn}"
-            />
-          </label>
+      <header className="topbar">
+        <div>
+          <h1>Bulk Image Resizer</h1>
+          <p>Local-only ecommerce image processing. No uploads, no server, fast batch workflow.</p>
         </div>
-
-        <div className="toggles">
-          <label>
-            <input
-              type="checkbox"
-              checked={options.useAutoFocal}
-              onChange={(e) => setOptions((prev) => ({ ...prev, useAutoFocal: e.target.checked }))}
-              disabled={options.fitMode !== 'crop'}
-            />
-            Auto focal crop (smartcrop)
-          </label>
-          <span className="hint">Crop to fill = fills the chosen size and may trim edges. Fit inside = shows the full image and may add background space.</span>
-          <span className="hint">Pattern tokens: ORIGINAL-NAME, {'{n}'}, {'{nn}'}, {'{nnn}'}</span>
-        </div>
-      </section>
-
-      <section
-        className={`panel dropzone ${dragOver ? 'active' : ''}`}
-        onDrop={onDrop}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-      >
-        <p>Drag & drop images here, or use file picker.</p>
-        <input
-          id="picker"
-          type="file"
-          accept=".jpg,.jpeg,.png,.webp,.avif,.gif,.bmp,.tif,.tiff,.svg,image/jpeg,image/png,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/svg+xml"
-          multiple
-          onChange={onFileInput}
-        />
         <label htmlFor="picker" className="button secondary">
-          Select Images
+          Add Images
         </label>
-      </section>
-
-      <section className="panel actions">
-        <button className="button" disabled={!canProcess} onClick={() => runProcessing(false)}>
-          Process + Download ZIP
-        </button>
-        <button
-          className="button secondary"
-          disabled={!canProcess || !supportsDirectoryPicker}
-          onClick={() => runProcessing(true)}
-        >
-          Process + Save to Folder
-        </button>
-        <span className="hint">
-          Some system folders (such as Downloads) can be blocked by browser security. Create and select a new
-          export folder if needed.
-        </span>
-        <button className="button secondary" disabled={isProcessing || images.length === 0} onClick={clearAllImages}>
-          Clear All
-        </button>
-        <div className="progress">
-          <div className="bar" style={{ width: `${progressPct}%` }} />
-        </div>
-        <span>
-          Progress: {progress.done}/{progress.total}
-        </span>
-      </section>
+      </header>
 
       {globalError && <div className="error-banner">{globalError}</div>}
 
-      <section className="gallery">
-        {images.map((image) => (
-          <article key={image.id} className="card">
-            {(() => {
+      <div className="workspace">
+        <main className="workspace-main">
+          <section
+            className={`panel dropzone ${dragOver ? 'active' : ''} ${images.length > 0 ? 'compact' : ''}`}
+            onDrop={onDrop}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+          >
+            <p>{images.length > 0 ? 'Drop more images to add to this batch.' : 'Drag & drop images to begin.'}</p>
+            <input
+              id="picker"
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,.avif,.gif,.bmp,.tif,.tiff,.svg,image/jpeg,image/png,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/svg+xml"
+              multiple
+              onChange={onFileInput}
+            />
+            {images.length === 0 && (
+              <label htmlFor="picker" className="button secondary">
+                Select Images
+              </label>
+            )}
+          </section>
+
+          {options.fitMode === 'crop' && images.length > 0 && (
+            <p className="workspace-instruction hint">Click a tile, then drag to adjust crop inline.</p>
+          )}
+
+          <section className="gallery">
+            {images.map((image) => {
               const focal = getEffectiveFocalPoint(image);
               const cropRect = image.manualCropOverride
                 ? getCropRectFromOverride(image.dimensions.width, image.dimensions.height, image.manualCropOverride)
                 : getCropRect(image.dimensions.width, image.dimensions.height, focal);
+              const previewRect = editingImageId === image.id && editorCropRect ? editorCropRect : cropRect;
               const cropPreviewStyle: CSSProperties = {
-                width: `${(image.dimensions.width / cropRect.width) * 100}%`,
-                height: `${(image.dimensions.height / cropRect.height) * 100}%`,
-                left: `${(-cropRect.x / cropRect.width) * 100}%`,
-                top: `${(-cropRect.y / cropRect.height) * 100}%`
+                width: `${(image.dimensions.width / previewRect.width) * 100}%`,
+                height: `${(image.dimensions.height / previewRect.height) * 100}%`,
+                left: `${(-previewRect.x / previewRect.width) * 100}%`,
+                top: `${(-previewRect.y / previewRect.height) * 100}%`
               };
+              const isInlineEditing = options.fitMode === 'crop' && editingImageId === image.id;
 
               return (
-                <div
-                  className={`thumb-wrap fit-${options.fitMode}`}
-                  style={
-                    {
-                      '--contain-bg': options.backgroundColor,
-                      aspectRatio: `${options.width} / ${options.height}`
-                    } as CSSProperties
-                  }
-                  onClick={() => {
-                    if (options.fitMode === 'crop') {
-                      openCropEditor(image);
+                <article key={image.id} className={`card ${isInlineEditing ? 'editing' : ''}`}>
+                  <div
+                    ref={isInlineEditing ? cropEditorFrameRef : null}
+                    className={`thumb-wrap fit-${options.fitMode} ${isInlineEditing ? 'inline-editing' : ''}`}
+                    style={
+                      {
+                        '--contain-bg': options.backgroundColor,
+                        aspectRatio: `${options.width} / ${options.height}`
+                      } as CSSProperties
                     }
-                  }}
-                >
-                  {options.fitMode === 'contain' ? (
-                    <img src={image.previewUrl} alt={image.name} className="thumb thumb-contain" />
-                  ) : (
-                    <img src={image.previewUrl} alt={image.name} className="thumb thumb-crop-exact" style={cropPreviewStyle} />
-                  )}
-                  {image.manualCropOverride && options.fitMode === 'crop' && <span className="manual-indicator">Manual</span>}
-                  {image.smartCropApplied && options.fitMode === 'crop' && <span className="smart-indicator">Smart</span>}
-                  {image.autoFocalPoint && !image.manualFocalPoint && options.fitMode === 'crop' && (
-                    <div
-                      className="focal-dot auto"
-                      style={{
-                        left: `${image.autoFocalPoint.x * 100}%`,
-                        top: `${image.autoFocalPoint.y * 100}%`
-                      }}
-                    />
-                  )}
-                  {image.manualFocalPoint && (
-                    <div
-                      className="focal-dot"
-                      style={{
-                        left: `${image.manualFocalPoint.x * 100}%`,
-                        top: `${image.manualFocalPoint.y * 100}%`
-                      }}
-                    />
-                  )}
-                </div>
+                    onClick={() => {
+                      if (options.fitMode === 'crop') {
+                        enableInlineCropEditing(image);
+                      }
+                    }}
+                    onPointerDown={(event) => {
+                      if (!isInlineEditing || isProcessing) {
+                        return;
+                      }
+                      onCropDragStart(event);
+                    }}
+                    onPointerMove={(event) => {
+                      if (!isInlineEditing || isProcessing) {
+                        return;
+                      }
+                      onCropDragMove(event, image);
+                    }}
+                    onPointerUp={(event) => {
+                      if (!isInlineEditing || isProcessing) {
+                        return;
+                      }
+                      onCropDragEnd(event, image);
+                    }}
+                    onPointerCancel={(event) => {
+                      if (!isInlineEditing || isProcessing) {
+                        return;
+                      }
+                      onCropDragEnd(event, image);
+                    }}
+                  >
+                    {options.fitMode === 'contain' ? (
+                      <img src={image.previewUrl} alt={image.name} className="thumb thumb-contain" />
+                    ) : (
+                      <img
+                        src={image.previewUrl}
+                        alt={image.name}
+                        className={`thumb thumb-crop-exact ${isDraggingCrop && isInlineEditing ? 'dragging' : ''}`}
+                        style={cropPreviewStyle}
+                        draggable={false}
+                      />
+                    )}
+
+                    {options.fitMode === 'crop' && !isInlineEditing && (
+                      <span className="inline-hint">Click and drag to adjust crop</span>
+                    )}
+                    {isInlineEditing && <span className="inline-hint active">Dragging updates crop instantly</span>}
+
+                    {image.manualCropOverride && options.fitMode === 'crop' && <span className="manual-indicator">Manual</span>}
+                    {image.smartCropApplied && options.fitMode === 'crop' && <span className="smart-indicator">Smart</span>}
+                    {image.autoFocalPoint && !image.manualFocalPoint && options.fitMode === 'crop' && (
+                      <div
+                        className="focal-dot auto"
+                        style={{
+                          left: `${image.autoFocalPoint.x * 100}%`,
+                          top: `${image.autoFocalPoint.y * 100}%`
+                        }}
+                      />
+                    )}
+                    {image.manualFocalPoint && (
+                      <div
+                        className="focal-dot"
+                        style={{
+                          left: `${image.manualFocalPoint.x * 100}%`,
+                          top: `${image.manualFocalPoint.y * 100}%`
+                        }}
+                      />
+                    )}
+
+                    <div className="tile-actions">
+                      <button
+                        className="link"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeImage(image.id);
+                        }}
+                        disabled={isProcessing}
+                      >
+                        Remove
+                      </button>
+                      {image.manualCropOverride && options.fitMode === 'crop' && (
+                        <button
+                          className="link"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            clearManualCropOverride(image.id);
+                            if (editingImageId === image.id) {
+                              setEditorCropRect(getCropRect(image.dimensions.width, image.dimensions.height, getEffectiveFocalPoint(image)));
+                              disableInlineCropEditing();
+                            }
+                          }}
+                          disabled={isProcessing}
+                        >
+                          Reset crop
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="meta">
+                    <strong>{image.file.name}</strong>
+                    <small>
+                      {image.dimensions.width} × {image.dimensions.height} • {formatFileSize(image.file.size)}
+                    </small>
+                    <small>Status: {image.status}</small>
+                    {image.error && <small className="error">{image.error}</small>}
+                  </div>
+                </article>
               );
-            })()}
-            <div className="meta">
-              <strong>{image.file.name}</strong>
-              <small>
-                Original: {image.dimensions.width} × {image.dimensions.height}
-              </small>
-              <small>Size: {formatFileSize(image.file.size)}</small>
-              <small>Status: {image.status}</small>
-              {image.error && <small className="error">{image.error}</small>}
-            </div>
-            <button className="link" onClick={() => removeImage(image.id)} disabled={isProcessing}>
-              Remove
-            </button>
-            {image.manualCropOverride && (
-              <button className="link" onClick={() => clearManualCropOverride(image.id)} disabled={isProcessing}>
-                Reset manual crop
-              </button>
-            )}
-          </article>
-        ))}
-      </section>
+            })}
+          </section>
+        </main>
 
-      {editingImageId && editorCropRect && options.fitMode === 'crop' && (() => {
-        const image = images.find((item) => item.id === editingImageId);
-        if (!image) {
-          return null;
-        }
+        <aside className="panel controls-sidebar">
+          <h2>Output Controls</h2>
+          <div className="grid compact-grid">
+            <label>
+              Size preset
+              <select value={selectedPreset} onChange={(e) => onPresetChange(e.target.value as SizePresetId)}>
+                {SIZE_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        const editorImageStyle: CSSProperties = {
-          width: `${(image.dimensions.width / editorCropRect.width) * 100}%`,
-          height: `${(image.dimensions.height / editorCropRect.height) * 100}%`,
-          left: `${(-editorCropRect.x / editorCropRect.width) * 100}%`,
-          top: `${(-editorCropRect.y / editorCropRect.height) * 100}%`
-        };
+            <label>
+              Width
+              <input
+                type="number"
+                min={1}
+                value={options.width}
+                onChange={(e) => onDimensionChange('width', Number(e.target.value))}
+              />
+            </label>
 
-        return (
-          <div className="crop-editor-overlay" onClick={closeCropEditor}>
-            <div className="crop-editor" onClick={(event) => event.stopPropagation()}>
-              <div className="crop-editor-header">
-                <strong>{image.file.name}</strong>
-                <button className="link" onClick={closeCropEditor}>Close</button>
-              </div>
-              <p className="hint">Drag image to set crop. Frame ratio is {options.width}:{options.height}.</p>
-              <div
-                ref={cropEditorFrameRef}
-                className="crop-editor-frame"
-                style={{ aspectRatio: `${options.width} / ${options.height}` }}
-                onPointerDown={onCropDragStart}
-                onPointerMove={(event) => onCropDragMove(event, image)}
-                onPointerUp={(event) => onCropDragEnd(event, image)}
-                onPointerCancel={(event) => onCropDragEnd(event, image)}
+            <label>
+              Height
+              <input
+                type="number"
+                min={1}
+                value={options.height}
+                onChange={(e) => onDimensionChange('height', Number(e.target.value))}
+              />
+            </label>
+
+            <label>
+              Fit mode
+              <select
+                value={options.fitMode}
+                onChange={(e) => {
+                  setOptions((prev) => ({ ...prev, fitMode: e.target.value as FitMode }));
+                  disableInlineCropEditing();
+                }}
               >
-                <img src={image.previewUrl} alt={image.name} className="crop-editor-image" style={editorImageStyle} draggable={false} />
-              </div>
-              <div className="crop-editor-actions">
-                <button
-                  className="button secondary"
-                  onClick={() => {
-                    clearManualCropOverride(image.id);
-                    setEditorCropRect(getCropRect(image.dimensions.width, image.dimensions.height, getEffectiveFocalPoint(image)));
-                  }}
-                >
-                  Reset to auto/center
-                </button>
-                <button className="button" onClick={closeCropEditor}>Done</button>
-              </div>
-            </div>
+                <option value="crop">Crop to fill</option>
+                <option value="contain">Fit inside</option>
+              </select>
+            </label>
+
+            {options.fitMode === 'contain' && (
+              <label>
+                Contain background
+                <div className="contain-bg-control">
+                  <select
+                    value={options.backgroundColor}
+                    onChange={(e) => setOptions((prev) => ({ ...prev, backgroundColor: e.target.value }))}
+                  >
+                    <option value="#ffffff">White</option>
+                    <option value="transparent">Transparent</option>
+                    <option value="#000000">Black</option>
+                  </select>
+                  <span
+                    className={`bg-swatch ${options.backgroundColor === 'transparent' ? 'transparent' : ''}`}
+                    style={options.backgroundColor === 'transparent' ? undefined : { backgroundColor: options.backgroundColor }}
+                  />
+                </div>
+              </label>
+            )}
+
+            <label>
+              Output format
+              <select
+                value={options.format}
+                onChange={(e) => setOptions((prev) => ({ ...prev, format: e.target.value as OutputFormat }))}
+              >
+                <option value="original">Original</option>
+                <option value="jpeg">JPEG</option>
+                <option value="webp">WebP</option>
+                <option value="avif">AVIF</option>
+              </select>
+            </label>
+
+            <label>
+              Quality ({Math.round(options.quality * 100)})
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={options.quality}
+                onChange={(e) => setOptions((prev) => ({ ...prev, quality: Number(e.target.value) }))}
+                disabled={options.format === 'original'}
+              />
+            </label>
+
+            <label>
+              Rename pattern
+              <input
+                type="text"
+                value={options.renamePattern}
+                onChange={(e) => setOptions((prev) => ({ ...prev, renamePattern: e.target.value }))}
+                placeholder="ORIGINAL-NAME-{nnn}"
+              />
+            </label>
+
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={options.useAutoFocal}
+                onChange={(e) => setOptions((prev) => ({ ...prev, useAutoFocal: e.target.checked }))}
+                disabled={options.fitMode !== 'crop'}
+              />
+              Auto focal crop
+            </label>
           </div>
-        );
-      })()}
+
+          <div className="actions compact-actions">
+            <button className="button" disabled={!canProcess} onClick={() => runProcessing(false)}>
+              Process + Download ZIP
+            </button>
+            <button
+              className="button secondary"
+              disabled={!canProcess || !supportsDirectoryPicker}
+              onClick={() => runProcessing(true)}
+            >
+              Process + Save to Folder
+            </button>
+            <button className="button secondary" disabled={isProcessing || images.length === 0} onClick={clearAllImages}>
+              Clear All
+            </button>
+            <div className="progress">
+              <div className="bar" style={{ width: `${progressPct}%` }} />
+            </div>
+            <span>
+              Progress: {progress.done}/{progress.total}
+            </span>
+          </div>
+
+          <p className="hint">Pattern tokens: ORIGINAL-NAME, {'{n}'}, {'{nn}'}, {'{nnn}'}</p>
+          <p className="hint">Crop to fill trims overflow. Fit inside preserves full image and can add background.</p>
+        </aside>
+      </div>
     </div>
   );
 }
