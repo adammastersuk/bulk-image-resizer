@@ -9,8 +9,8 @@ A fast internal ecommerce-oriented bulk image resizer built with **React + TypeS
 - Batch resizing by explicit width/height
 - Reusable size presets (includes **Custom** and **PLP Square (1000x1000)**)
 - Fit modes:
-  - **Contain** (letterbox inside target size)
-  - **Crop to fill** (fills target size)
+  - **Contain** keeps the full image visible inside the target size and fills any remaining area with a configurable background color (white by default).
+  - **Crop to fill** always fills the target dimensions exactly, cropping overflow and centering by default (or using smart/manual focal points).
 - Cropping controls:
   - Optional **auto focal point** (via `smartcrop`)
   - **Manual focal override** per image by clicking on the thumbnail
@@ -24,6 +24,7 @@ A fast internal ecommerce-oriented bulk image resizer built with **React + TypeS
   - `ORIGINAL-NAME`
   - `{n}`, `{nn}`, `{nnn}`
 - Queue/progress tracking with per-image status (idle/processing/done/error)
+- Efficient large-batch processing with a small worker pool (chunked concurrency) to keep memory and UI responsiveness stable
 - Download processed files as a ZIP (`JSZip`)
 - Optional save directly to a folder using File System Access API in supporting browsers
 - Fully local processing in the browser (no server uploads)
@@ -54,10 +55,11 @@ npm run build
 
 1. Drop images into the dropzone.
 2. Choose a size preset (or leave on **Custom**), then adjust width/height and fit mode.
-3. Optionally enable auto focal crop (best for crop-to-fill mode).
-4. Click a thumbnail to set a manual focal point override for that image.
-5. Choose output format, quality, and filename pattern.
-6. Process:
+3. For **Contain**, optionally pick the background fill color used for letterboxing.
+4. For **Crop to fill**, optionally enable auto focal crop (Smartcrop) to suggest a focal point.
+5. Click a thumbnail to set a manual focal point override for that image (manual override always wins over auto focal).
+6. Choose output format, quality, and filename pattern.
+7. Process:
    - **Process + Download ZIP** (default)
    - **Process + Save to Folder** (if browser supports `showDirectoryPicker`)
 
