@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import BulkImageResizerTool from './BulkImageResizerTool';
 import FileConverterTool from './FileConverterTool';
+import DocumentConverterTool from './DocumentConverterTool';
 
-type ToolTab = 'resizer' | 'converter';
+type ToolTab = 'resizer' | 'converter' | 'document';
 
 function App() {
   const [activeTab, setActiveTab] = useState<ToolTab>('resizer');
@@ -28,10 +29,20 @@ function App() {
           >
             Image Converter
           </button>
+
+          <button
+            className={`tab ${activeTab === 'document' ? 'active' : ''}`}
+            onClick={() => setActiveTab('document')}
+            type="button"
+          >
+            Document Converter
+          </button>
         </nav>
       </header>
 
-      {activeTab === 'resizer' ? <BulkImageResizerTool /> : <FileConverterTool />}
+      {activeTab === 'resizer' && <BulkImageResizerTool />}
+      {activeTab === 'converter' && <FileConverterTool />}
+      {activeTab === 'document' && <DocumentConverterTool />}
     </div>
   );
 }

@@ -433,3 +433,22 @@ input[type='file'] { display: none; }
   .topbar { flex-direction: column; align-items: stretch; }
   .gallery { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 }
+
+.document-gallery {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.document-card {
+  min-height: 150px;
+  justify-content: space-between;
+}
+
+.status-pill {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.capability-list {
+  margin: 8px 0 0 16px;
+  padding: 0;
+}
