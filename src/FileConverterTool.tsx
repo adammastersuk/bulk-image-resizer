@@ -43,7 +43,8 @@ const ACCEPTED_IMAGE_MIME_TYPES = new Set([
 ]);
 
 const ACCEPTED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'tif', 'tiff', 'bmp', 'gif']);
-const ACCEPTED_IMAGE = '.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff,.bmp,.gif,image/jpeg,image/png,image/webp,image/avif,image/tiff,image/bmp,image/gif';
+const ACCEPTED_IMAGE =
+  '.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff,.bmp,.gif,image/jpeg,image/png,image/webp,image/avif,image/tiff,image/bmp,image/gif';
 
 function FileConverterTool() {
   const [files, setFiles] = useState<SourceFileItem[]>([]);
@@ -70,6 +71,15 @@ function FileConverterTool() {
 
     return new Set<ConvertFormat>(supported);
   }, []);
+
+  const availableFormatOptions = useMemo(
+    () => FORMAT_OPTIONS.filter((option) => supportedOutputFormats.has(option.value)),
+    [supportedOutputFormats]
+  );
+  const unavailableFormatLabels = useMemo(
+    () => FORMAT_OPTIONS.filter((option) => !supportedOutputFormats.has(option.value)).map((option) => option.label),
+    [supportedOutputFormats]
+  );
 
   const selectedFormat = FORMAT_OPTIONS.find((option) => option.value === outputFormat) ?? FORMAT_OPTIONS[0];
 
@@ -324,14 +334,11 @@ function FileConverterTool() {
             <label>
               Output format
               <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as ConvertFormat)}>
-                {FORMAT_OPTIONS.map((format) => {
-                  const isSupported = supportedOutputFormats.has(format.value);
-                  return (
-                    <option key={format.value} value={format.value} disabled={!isSupported}>
-                      {format.label} {!isSupported ? '(Not supported in this browser)' : ''}
-                    </option>
-                  );
-                })}
+                {availableFormatOptions.map((format) => (
+                  <option key={format.value} value={format.value}>
+                    {format.label}
+                  </option>
+                ))}
               </select>
             </label>
 
@@ -349,8 +356,12 @@ function FileConverterTool() {
             </label>
           </div>
 
+          {unavailableFormatLabels.length > 0 && (
+            <p className="hint">Unavailable in this browser: {unavailableFormatLabels.join(', ')}. Try a different browser for these outputs.</p>
+          )}
+
           <div className="actions compact-actions">
-            <button className="button" onClick={onConvert} disabled={!canConvert}>
+            <button className="button" onClick={onConvert} disabled={!canConvert || availableFormatOptions.length === 0}>
               Convert + Download ZIP
             </button>
             <button className="button secondary" disabled={isConverting || files.length === 0} onClick={clearAll}>
