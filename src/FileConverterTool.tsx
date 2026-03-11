@@ -1,7 +1,7 @@
 import JSZip from 'jszip';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-type ConvertFormat = 'jpeg' | 'png' | 'webp' | 'avif';
+type ConvertFormat = 'jpeg' | 'png' | 'webp' | 'avif' | 'tiff' | 'bmp' | 'gif';
 type FileStatus = 'idle' | 'processing' | 'done' | 'error';
 
 interface SourceFileItem {
@@ -14,7 +14,37 @@ interface SourceFileItem {
   error?: string;
 }
 
-const ACCEPTED_IMAGE = '.jpg,.jpeg,.png,.webp,.avif,image/jpeg,image/png,image/webp,image/avif';
+interface FormatOption {
+  value: ConvertFormat;
+  label: string;
+  extension: string;
+  mimeType: string;
+  qualityAdjustable: boolean;
+}
+
+const FORMAT_OPTIONS: FormatOption[] = [
+  { value: 'jpeg', label: 'JPG / JPEG', extension: 'jpg', mimeType: 'image/jpeg', qualityAdjustable: true },
+  { value: 'png', label: 'PNG', extension: 'png', mimeType: 'image/png', qualityAdjustable: false },
+  { value: 'webp', label: 'WebP', extension: 'webp', mimeType: 'image/webp', qualityAdjustable: true },
+  { value: 'avif', label: 'AVIF', extension: 'avif', mimeType: 'image/avif', qualityAdjustable: true },
+  { value: 'tiff', label: 'TIFF / TIF', extension: 'tiff', mimeType: 'image/tiff', qualityAdjustable: false },
+  { value: 'bmp', label: 'BMP', extension: 'bmp', mimeType: 'image/bmp', qualityAdjustable: false },
+  { value: 'gif', label: 'GIF (static)', extension: 'gif', mimeType: 'image/gif', qualityAdjustable: false }
+];
+
+const ACCEPTED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+  'image/gif',
+  'image/bmp',
+  'image/tiff'
+]);
+
+const ACCEPTED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'tif', 'tiff', 'bmp', 'gif']);
+const ACCEPTED_IMAGE =
+  '.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff,.bmp,.gif,image/jpeg,image/png,image/webp,image/avif,image/tiff,image/bmp,image/gif';
 
 function FileConverterTool() {
   const [files, setFiles] = useState<SourceFileItem[]>([]);
@@ -28,14 +58,41 @@ function FileConverterTool() {
 
   const canConvert = useMemo(() => files.length > 0 && !isConverting, [files.length, isConverting]);
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
-  const supportsAvif = useMemo(() => {
+
+  const supportedOutputFormats = useMemo(() => {
     if (typeof document === 'undefined') {
-      return false;
+      return new Set<ConvertFormat>(['jpeg', 'png']);
     }
 
     const canvas = document.createElement('canvas');
-    return canvas.toDataURL('image/avif').startsWith('data:image/avif');
+    const supported = FORMAT_OPTIONS.filter((option) => canvas.toDataURL(option.mimeType).startsWith(`data:${option.mimeType}`)).map(
+      (option) => option.value
+    );
+
+    return new Set<ConvertFormat>(supported);
   }, []);
+
+  const availableFormatOptions = useMemo(
+    () => FORMAT_OPTIONS.filter((option) => supportedOutputFormats.has(option.value)),
+    [supportedOutputFormats]
+  );
+  const unavailableFormatLabels = useMemo(
+    () => FORMAT_OPTIONS.filter((option) => !supportedOutputFormats.has(option.value)).map((option) => option.label),
+    [supportedOutputFormats]
+  );
+
+  const selectedFormat = FORMAT_OPTIONS.find((option) => option.value === outputFormat) ?? FORMAT_OPTIONS[0];
+
+  useEffect(() => {
+    if (supportedOutputFormats.has(outputFormat)) {
+      return;
+    }
+
+    const firstSupported = FORMAT_OPTIONS.find((option) => supportedOutputFormats.has(option.value));
+    if (firstSupported) {
+      setOutputFormat(firstSupported.value);
+    }
+  }, [outputFormat, supportedOutputFormats]);
 
   const revokeAllUrls = () => {
     urlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -59,15 +116,24 @@ function FileConverterTool() {
       img.src = objectUrl;
     });
 
+  const isAcceptedImageFile = (file: File) => {
+    if (ACCEPTED_IMAGE_MIME_TYPES.has(file.type)) {
+      return true;
+    }
+
+    const ext = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() ?? '' : '';
+    return ACCEPTED_IMAGE_EXTENSIONS.has(ext);
+  };
+
   const addFiles = async (inputFiles: File[]) => {
-    const incoming = inputFiles.filter((file) => file.type.startsWith('image/'));
+    const incoming = inputFiles.filter((file) => isAcceptedImageFile(file));
     if (!incoming.length) {
-      setError('Please add image files (JPG, PNG, WebP, AVIF).');
+      setError('Please add image files (JPG, PNG, WebP, AVIF, TIFF, BMP, GIF).');
       return;
     }
 
-    const next = await Promise.all(
-      incoming.map(async (file) => {
+    const settled = await Promise.allSettled(
+      incoming.map(async (file): Promise<SourceFileItem> => {
         const dimensions = await readImageDimensions(file);
         return {
           id: crypto.randomUUID(),
@@ -75,17 +141,26 @@ function FileConverterTool() {
           name: file.name.replace(/\.[^/.]+$/, ''),
           previewUrl: URL.createObjectURL(file),
           dimensions,
-          status: 'idle' as const
+          status: 'idle'
         };
       })
     );
 
+    const loaded = settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+    const failedCount = settled.length - loaded.length;
+
+    if (!loaded.length) {
+      setError('Unable to load the selected images. Please try different files.');
+      return;
+    }
+
     setFiles((prev) => {
-      const updated = [...prev, ...next];
+      const updated = [...prev, ...loaded];
       urlsRef.current = updated.map((item) => item.previewUrl);
       return updated;
     });
-    setError(null);
+
+    setError(failedCount > 0 ? `Skipped ${failedCount} file${failedCount === 1 ? '' : 's'} that could not be read.` : null);
   };
 
   const onInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -105,7 +180,13 @@ function FileConverterTool() {
   };
 
   const removeFile = (id: string) => {
-    setFiles((prev) => prev.filter((item) => item.id !== id));
+    setFiles((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((item) => item.id !== id);
+    });
   };
 
   const clearAll = () => {
@@ -115,20 +196,18 @@ function FileConverterTool() {
     setError(null);
   };
 
-  const extForFormat = (format: ConvertFormat) => (format === 'jpeg' ? 'jpg' : format);
-
-  const toBlob = (canvas: HTMLCanvasElement, format: ConvertFormat, outputQuality: number): Promise<Blob> =>
+  const toBlob = (canvas: HTMLCanvasElement, option: FormatOption, outputQuality: number): Promise<Blob> =>
     new Promise((resolve, reject) => {
       canvas.toBlob(
         (blob) => {
           if (!blob) {
-            reject(new Error('Browser conversion failed for this file.'));
+            reject(new Error(`${option.label} export is not supported by this browser.`));
             return;
           }
           resolve(blob);
         },
-        `image/${format}`,
-        format === 'png' ? undefined : outputQuality
+        option.mimeType,
+        option.qualityAdjustable ? outputQuality : undefined
       );
     });
 
@@ -146,11 +225,16 @@ function FileConverterTool() {
 
     context.drawImage(imageBitmap, 0, 0);
     imageBitmap.close();
-    return toBlob(canvas, outputFormat, quality);
+    return toBlob(canvas, selectedFormat, quality);
   };
 
   const onConvert = async () => {
     if (!canConvert) {
+      return;
+    }
+
+    if (!supportedOutputFormats.has(outputFormat)) {
+      setError(`${selectedFormat.label} conversion is not supported in this browser.`);
       return;
     }
 
@@ -165,7 +249,7 @@ function FileConverterTool() {
 
       try {
         const blob = await convertOne(item);
-        zip.file(`${item.name}.${extForFormat(outputFormat)}`, blob);
+        zip.file(`${item.name}.${selectedFormat.extension}`, blob);
         setFiles((prev) => prev.map((current) => (current.id === item.id ? { ...current, status: 'done' } : current)));
       } catch (conversionError) {
         const message = conversionError instanceof Error ? conversionError.message : 'Unknown conversion error';
@@ -182,7 +266,7 @@ function FileConverterTool() {
     const url = URL.createObjectURL(archiveBlob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `converted-${outputFormat}.zip`;
+    anchor.download = `converted-${selectedFormat.extension}.zip`;
     anchor.click();
     URL.revokeObjectURL(url);
 
@@ -245,17 +329,16 @@ function FileConverterTool() {
         </main>
 
         <aside className="panel controls-sidebar">
-          <h2>Converter Controls</h2>
+          <h2>Image Converter Controls</h2>
           <div className="grid compact-grid">
             <label>
               Output format
               <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as ConvertFormat)}>
-                <option value="jpeg">JPG / JPEG</option>
-                <option value="png">PNG</option>
-                <option value="webp">WebP</option>
-                <option value="avif" disabled={!supportsAvif}>
-                  AVIF {!supportsAvif ? '(Not supported in this browser)' : ''}
-                </option>
+                {availableFormatOptions.map((format) => (
+                  <option key={format.value} value={format.value}>
+                    {format.label}
+                  </option>
+                ))}
               </select>
             </label>
 
@@ -268,13 +351,17 @@ function FileConverterTool() {
                 step={0.05}
                 value={quality}
                 onChange={(event) => setQuality(Number(event.target.value))}
-                disabled={outputFormat === 'png'}
+                disabled={!selectedFormat.qualityAdjustable}
               />
             </label>
           </div>
 
+          {unavailableFormatLabels.length > 0 && (
+            <p className="hint">Unavailable in this browser: {unavailableFormatLabels.join(', ')}. Try a different browser for these outputs.</p>
+          )}
+
           <div className="actions compact-actions">
-            <button className="button" onClick={onConvert} disabled={!canConvert}>
+            <button className="button" onClick={onConvert} disabled={!canConvert || availableFormatOptions.length === 0}>
               Convert + Download ZIP
             </button>
             <button className="button secondary" disabled={isConverting || files.length === 0} onClick={clearAll}>
