@@ -6,7 +6,7 @@ import {
   getDocumentFormatByFileName
 } from './documentConverterCapabilities';
 
-type DocumentFileStatus = 'queued' | 'server-required' | 'unsupported';
+type DocumentFileStatus = 'ready' | 'server-required' | 'coming-soon' | 'unsupported';
 
 interface DocumentFileItem {
   id: string;
@@ -14,7 +14,29 @@ interface DocumentFileItem {
   status: DocumentFileStatus;
   message: string;
   formatLabel: string;
+  extension: string;
+  sizeLabel: string;
 }
+
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  return `${(kb / 1024).toFixed(2)} MB`;
+};
+
+const STATUS_LABELS: Record<DocumentFileStatus, string> = {
+  ready: 'Ready',
+  'server-required': 'Server-powered',
+  'coming-soon': 'Coming soon',
+  unsupported: 'Unsupported'
+};
 
 function DocumentConverterTool() {
   const [files, setFiles] = useState<DocumentFileItem[]>([]);
@@ -22,10 +44,9 @@ function DocumentConverterTool() {
   const [outputFormat, setOutputFormat] = useState<DocumentOutputFormat>('pdf');
   const [error, setError] = useState<string | null>(null);
 
-  const canPrepareConversion = useMemo(
-    () => files.some((file) => file.status === 'server-required'),
-    [files]
-  );
+  const serverReadyCount = files.filter((file) => file.status === 'server-required').length;
+  const unsupportedCount = files.filter((file) => file.status === 'unsupported').length;
+  const canPrepareConversion = useMemo(() => serverReadyCount > 0, [serverReadyCount]);
 
   const addFiles = (incomingFiles: File[]) => {
     if (!incomingFiles.length) {
@@ -34,6 +55,7 @@ function DocumentConverterTool() {
 
     const nextFiles = incomingFiles.map((file): DocumentFileItem => {
       const format = getDocumentFormatByFileName(file.name);
+      const extension = file.name.split('.').pop()?.toUpperCase() ?? 'Unknown';
 
       if (!format) {
         return {
@@ -41,15 +63,19 @@ function DocumentConverterTool() {
           file,
           status: 'unsupported',
           formatLabel: 'Unknown format',
-          message: 'This file type is not in the current roadmap for document conversion.'
+          extension,
+          sizeLabel: formatBytes(file.size),
+          message: 'This file type is not supported. Please upload DOC, DOCX, PPT, PPTX, XLS, XLSX, or PUB files.'
         };
       }
 
       return {
         id: crypto.randomUUID(),
         file,
-        status: format.availability === 'server' ? 'server-required' : 'queued',
+        status: format.availability === 'server' ? 'server-required' : 'ready',
         formatLabel: format.label,
+        extension,
+        sizeLabel: formatBytes(file.size),
         message: format.statusMessage
       };
     });
@@ -89,7 +115,7 @@ function DocumentConverterTool() {
     }
 
     setError(
-      'Conversion execution is not available in-browser for these formats yet. Connect a server conversion endpoint in a future update.'
+      'Conversion execution is not enabled in this app yet. These recognized files are marked as server-powered and require a backend conversion endpoint.'
     );
   };
 
@@ -99,6 +125,11 @@ function DocumentConverterTool() {
 
       <div className="workspace">
         <main className="workspace-main">
+          <section className="panel converter-intro">
+            <h2>Convert supported document types to PDF</h2>
+            <p>Some document types may require server-side conversion depending on availability.</p>
+          </section>
+
           <input id="document-picker" type="file" accept={SUPPORTED_DOCUMENT_PICKER_TYPES} multiple onChange={onInputChange} />
 
           <section
@@ -111,13 +142,20 @@ function DocumentConverterTool() {
             onDragLeave={() => setDragOver(false)}
           >
             <div className={`canvas-overlay ${files.length > 0 ? 'subtle' : ''}`}>
-              <p>
-                {files.length > 0
-                  ? 'Drop more documents anywhere in this workspace to queue them for conversion.'
-                  : 'Drag & drop documents to start building a PDF conversion batch.'}
-              </p>
+              {files.length > 0 ? (
+                <>
+                  <p>Drop more documents anywhere in this workspace to queue them for conversion.</p>
+                  <p className="status-summary">{serverReadyCount} files ready for server-powered conversion</p>
+                  <p className="status-summary">{unsupportedCount} unsupported files</p>
+                </>
+              ) : (
+                <>
+                  <p>Drag and drop office documents to prepare a PDF conversion batch.</p>
+                  <p className="status-summary">Supported inputs: DOC, DOCX, PPT, PPTX, XLS, XLSX, and PUB.</p>
+                </>
+              )}
               <label htmlFor="document-picker" className="button secondary compact-picker-button">
-                Select Documents
+                Select Document Files
               </label>
             </div>
 
@@ -133,11 +171,12 @@ function DocumentConverterTool() {
                   </div>
                   <div className="meta">
                     <strong>{item.file.name}</strong>
-                    <small>{item.formatLabel}</small>
-                    <small>Size: {(item.file.size / 1024 / 1024).toFixed(2)} MB</small>
-                    <small className={item.status === 'unsupported' ? 'error' : 'status-pill'}>
-                      {item.status === 'unsupported' ? 'Unsupported in roadmap' : 'Server processing required'}
+                    <small className="badge-row">
+                      <span className="format-badge">{item.extension}</span>
+                      <span>{item.sizeLabel}</span>
                     </small>
+                    <small>{item.formatLabel}</small>
+                    <small className={item.status === 'unsupported' ? 'error' : 'status-pill'}>Status: {STATUS_LABELS[item.status]}</small>
                     <small>{item.message}</small>
                   </div>
                 </article>
@@ -148,6 +187,43 @@ function DocumentConverterTool() {
 
         <aside className="panel controls-sidebar">
           <h2>Document Converter Controls</h2>
+          <p className="hint no-top-margin">Review support details, upload documents, then convert supported files to PDF.</p>
+
+          <section className="support-panel">
+            <h3>Supported document types</h3>
+            <div className="support-list">
+              <div className="support-item">
+                <span>Word: DOC, DOCX</span>
+                <span className="status-tag server">Server-powered</span>
+              </div>
+              <div className="support-item">
+                <span>PowerPoint: PPT, PPTX</span>
+                <span className="status-tag server">Server-powered</span>
+              </div>
+              <div className="support-item">
+                <span>Excel: XLS, XLSX</span>
+                <span className="status-tag server">Server-powered</span>
+              </div>
+              <div className="support-item">
+                <span>Publisher: PUB</span>
+                <span className="status-tag coming">Coming soon</span>
+              </div>
+              <div className="support-item">
+                <span>PDF tools: Merge, Compress</span>
+                <span className="status-tag coming">Coming soon</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="summary-panel">
+            <h3>Conversion summary</h3>
+            <ul>
+              <li>Supported inputs: DOC, DOCX, PPT, PPTX, XLS, XLSX, PUB</li>
+              <li>Target output: PDF</li>
+              <li>Current limitation: recognized formats need server-side conversion for reliable output</li>
+            </ul>
+          </section>
+
           <div className="grid compact-grid">
             <label>
               Output format
@@ -159,21 +235,18 @@ function DocumentConverterTool() {
 
           <div className="actions compact-actions">
             <button className="button" onClick={onPrepareConversion} type="button">
-              Prepare Conversion Batch
+              Convert supported files to PDF
             </button>
             <button className="button secondary" onClick={clearAll} disabled={files.length === 0} type="button">
               Clear All
             </button>
+            <span>{serverReadyCount} ready · {unsupportedCount} unsupported</span>
           </div>
 
-          <p className="hint">
-            Browser-only conversion is limited for complex office document formats. Some document conversions require server-side
-            rendering for reliable output fidelity.
-          </p>
           <ul className="hint capability-list">
             {DOCUMENT_FORMAT_OPTIONS.map((option) => (
               <li key={option.id}>
-                {option.label} → PDF: {option.availability === 'server' ? 'Planned via server workflow' : 'Available in browser'}
+                {option.label} → PDF: {option.availability === 'server' ? 'Server-powered' : 'Available now'}
               </li>
             ))}
           </ul>

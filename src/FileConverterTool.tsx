@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type ConvertFormat = 'jpeg' | 'png' | 'webp' | 'avif' | 'tiff' | 'bmp' | 'gif';
-type FileStatus = 'idle' | 'processing' | 'done' | 'error';
+type FileStatus = 'ready' | 'processing' | 'done' | 'unsupported' | 'error';
 
 interface SourceFileItem {
   id: string;
@@ -12,6 +12,8 @@ interface SourceFileItem {
   dimensions: { width: number; height: number };
   status: FileStatus;
   error?: string;
+  extension: string;
+  sizeLabel: string;
 }
 
 interface FormatOption {
@@ -46,6 +48,27 @@ const ACCEPTED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif',
 const ACCEPTED_IMAGE =
   '.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff,.bmp,.gif,image/jpeg,image/png,image/webp,image/avif,image/tiff,image/bmp,image/gif';
 
+const STATUS_LABELS: Record<FileStatus, string> = {
+  ready: 'Ready',
+  processing: 'Converting',
+  done: 'Done',
+  unsupported: 'Unsupported',
+  error: 'Failed'
+};
+
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  return `${(kb / 1024).toFixed(2)} MB`;
+};
+
 function FileConverterTool() {
   const [files, setFiles] = useState<SourceFileItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -58,6 +81,10 @@ function FileConverterTool() {
 
   const canConvert = useMemo(() => files.length > 0 && !isConverting, [files.length, isConverting]);
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
+  const unsupportedCount = files.filter((file) => file.status === 'unsupported').length;
+  const doneCount = files.filter((file) => file.status === 'done').length;
+  const convertingCount = files.filter((file) => file.status === 'processing').length;
+  const readyCount = files.filter((file) => file.status === 'ready').length;
 
   const supportedOutputFormats = useMemo(() => {
     if (typeof document === 'undefined') {
@@ -141,7 +168,9 @@ function FileConverterTool() {
           name: file.name.replace(/\.[^/.]+$/, ''),
           previewUrl: URL.createObjectURL(file),
           dimensions,
-          status: 'idle'
+          status: 'ready',
+          extension: file.name.split('.').pop()?.toUpperCase() ?? 'Unknown',
+          sizeLabel: formatBytes(file.size)
         };
       })
     );
@@ -254,7 +283,11 @@ function FileConverterTool() {
       } catch (conversionError) {
         const message = conversionError instanceof Error ? conversionError.message : 'Unknown conversion error';
         setFiles((prev) =>
-          prev.map((current) => (current.id === item.id ? { ...current, status: 'error', error: message } : current))
+          prev.map((current) =>
+            current.id === item.id
+              ? { ...current, status: 'unsupported', error: `Could not convert ${current.file.name} to ${selectedFormat.label}. ${message}` }
+              : current
+          )
         );
       }
 
@@ -279,6 +312,20 @@ function FileConverterTool() {
 
       <div className="workspace">
         <main className="workspace-main">
+          <section className="panel converter-intro">
+            <h2>Convert image files in bulk</h2>
+            <p>
+              Supports common ecommerce image formats and processes everything locally in the browser where possible.
+            </p>
+            <div className="format-chip-group">
+              {FORMAT_OPTIONS.map((format) => (
+                <span key={format.value} className="format-chip">
+                  {format.label}
+                </span>
+              ))}
+            </div>
+          </section>
+
           <input id="converter-picker" type="file" accept={ACCEPTED_IMAGE} multiple onChange={onInputChange} />
 
           <section
@@ -291,13 +338,20 @@ function FileConverterTool() {
             onDragLeave={() => setDragOver(false)}
           >
             <div className={`canvas-overlay ${files.length > 0 ? 'subtle' : ''}`}>
-              <p>
-                {files.length > 0
-                  ? 'Drop more images anywhere in this workspace to queue them for conversion.'
-                  : 'Drag & drop images to start converting files.'}
-              </p>
+              {files.length > 0 ? (
+                <>
+                  <p>Drop more images anywhere in this workspace to queue them for conversion.</p>
+                  <p className="status-summary">{readyCount} files ready to convert</p>
+                  <p className="status-summary">Output format: {selectedFormat.label}</p>
+                </>
+              ) : (
+                <>
+                  <p>Drag and drop product images to begin.</p>
+                  <p className="status-summary">Supports JPG, PNG, WebP, AVIF, TIFF, BMP, and static GIF files.</p>
+                </>
+              )}
               <label htmlFor="converter-picker" className="button secondary compact-picker-button">
-                Select Files
+                Select Image Files
               </label>
             </div>
 
@@ -316,10 +370,14 @@ function FileConverterTool() {
                   </div>
                   <div className="meta">
                     <strong>{item.file.name}</strong>
+                    <small className="badge-row">
+                      <span className="format-badge">{item.extension}</span>
+                      <span>{item.sizeLabel}</span>
+                    </small>
                     <small>
                       {item.dimensions.width} × {item.dimensions.height}
                     </small>
-                    <small>Status: {item.status}</small>
+                    <small>Status: {STATUS_LABELS[item.status]}</small>
                     {item.error && <small className="error">{item.error}</small>}
                   </div>
                 </article>
@@ -330,6 +388,19 @@ function FileConverterTool() {
 
         <aside className="panel controls-sidebar">
           <h2>Image Converter Controls</h2>
+          <p className="hint no-top-margin">Choose output format, review supported types, then convert and download a ZIP.</p>
+
+          <section className="support-panel">
+            <h3>Supported formats</h3>
+            <div className="format-chip-group">
+              {FORMAT_OPTIONS.map((format) => (
+                <span key={format.value} className="format-chip">
+                  {format.label}
+                </span>
+              ))}
+            </div>
+          </section>
+
           <div className="grid compact-grid">
             <label>
               Output format
@@ -373,6 +444,7 @@ function FileConverterTool() {
             <span>
               Progress: {progress.done}/{progress.total}
             </span>
+            <span>{doneCount} done · {convertingCount} converting · {unsupportedCount} unsupported</span>
           </div>
 
           <p className="hint">All conversion happens locally in your browser. Files are never uploaded.</p>
