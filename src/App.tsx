@@ -26,7 +26,7 @@ function App() {
             onClick={() => setActiveTab('converter')}
             type="button"
           >
-            File Converter
+            Image Converter
           </button>
         </nav>
       </header>
