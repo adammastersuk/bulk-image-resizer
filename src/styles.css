@@ -70,6 +70,20 @@ header p { margin: 0; color: #4b5563; }
 
 .workspace-main { min-width: 0; }
 
+.converter-intro {
+  margin-bottom: 12px;
+}
+
+.converter-intro h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.converter-intro p {
+  margin: 0;
+  color: #4b5563;
+}
+
 .panel {
   background: white;
   border-radius: 12px;
@@ -169,6 +183,12 @@ input[type='file'] { display: none; }
 
 .canvas-overlay p {
   margin: 0;
+}
+
+.status-summary {
+  font-size: 13px;
+  color: #374151;
+  font-weight: 600;
 }
 
 .canvas-overlay .button {
@@ -370,6 +390,25 @@ input[type='file'] { display: none; }
 .meta small { color: #4b5563; }
 .meta .error { color: #b91c1c; }
 
+.badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.format-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #1e3a8a;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .link {
   border: none;
   background: rgba(255, 255, 255, 0.85);
@@ -414,6 +453,79 @@ input[type='file'] { display: none; }
 }
 
 .hint { color: #6b7280; font-size: 12px; margin: 8px 0 0; }
+
+.no-top-margin {
+  margin-top: 0;
+}
+
+.support-panel,
+.summary-panel {
+  margin-top: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f9fafb;
+}
+
+.support-panel h3,
+.summary-panel h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.format-chip-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.format-chip {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.support-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.support-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.status-tag {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-tag.server {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.status-tag.coming {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.summary-panel ul {
+  margin: 0;
+  padding-left: 16px;
+  color: #4b5563;
+  font-size: 12px;
+}
 
 .error-banner {
   background: #fef2f2;
