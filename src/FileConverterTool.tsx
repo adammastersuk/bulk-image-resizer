@@ -47,6 +47,7 @@ const ACCEPTED_IMAGE_MIME_TYPES = new Set([
 const ACCEPTED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'tif', 'tiff', 'bmp', 'gif']);
 const ACCEPTED_IMAGE =
   '.jpg,.jpeg,.png,.webp,.avif,.tif,.tiff,.bmp,.gif,image/jpeg,image/png,image/webp,image/avif,image/tiff,image/bmp,image/gif';
+const supportsDirectoryPicker = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
 const STATUS_LABELS: Record<FileStatus, string> = {
   ready: 'Ready',
@@ -257,7 +258,7 @@ function FileConverterTool() {
     return toBlob(canvas, selectedFormat, quality);
   };
 
-  const onConvert = async () => {
+  const onConvert = async (saveToFolder: boolean) => {
     if (!canConvert) {
       return;
     }
@@ -271,6 +272,23 @@ function FileConverterTool() {
     setProgress({ done: 0, total: files.length });
     setError(null);
 
+    let directoryHandle: FileSystemDirectoryHandle | undefined;
+    if (saveToFolder && supportsDirectoryPicker) {
+      try {
+        directoryHandle = await (
+          window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }
+        ).showDirectoryPicker();
+      } catch (directoryError) {
+        if (directoryError instanceof DOMException && directoryError.name === 'AbortError') {
+          setProgress({ done: 0, total: 0 });
+          setIsConverting(false);
+          return;
+        }
+
+        throw directoryError;
+      }
+    }
+
     const zip = new JSZip();
 
     for (const [index, item] of files.entries()) {
@@ -278,7 +296,17 @@ function FileConverterTool() {
 
       try {
         const blob = await convertOne(item);
-        zip.file(`${item.name}.${selectedFormat.extension}`, blob);
+        const filename = `${item.name}.${selectedFormat.extension}`;
+
+        if (directoryHandle) {
+          const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } else {
+          zip.file(filename, blob);
+        }
+
         setFiles((prev) => prev.map((current) => (current.id === item.id ? { ...current, status: 'done' } : current)));
       } catch (conversionError) {
         const message = conversionError instanceof Error ? conversionError.message : 'Unknown conversion error';
@@ -295,13 +323,15 @@ function FileConverterTool() {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
-    const archiveBlob = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(archiveBlob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `converted-${selectedFormat.extension}.zip`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    if (!directoryHandle) {
+      const archiveBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(archiveBlob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `converted-${selectedFormat.extension}.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    }
 
     setIsConverting(false);
   };
@@ -388,7 +418,7 @@ function FileConverterTool() {
 
         <aside className="panel controls-sidebar">
           <h2>Image Converter Controls</h2>
-          <p className="hint no-top-margin">Choose output format, review supported types, then convert and download a ZIP.</p>
+          <p className="hint no-top-margin">Choose output format, then convert to a ZIP or save directly into a folder.</p>
 
           <section className="support-panel">
             <h3>Supported formats</h3>
@@ -432,8 +462,15 @@ function FileConverterTool() {
           )}
 
           <div className="actions compact-actions">
-            <button className="button" onClick={onConvert} disabled={!canConvert || availableFormatOptions.length === 0}>
+            <button className="button" onClick={() => onConvert(false)} disabled={!canConvert || availableFormatOptions.length === 0}>
               Convert + Download ZIP
+            </button>
+            <button
+              className="button secondary"
+              onClick={() => onConvert(true)}
+              disabled={!canConvert || availableFormatOptions.length === 0 || !supportsDirectoryPicker}
+            >
+              Convert + Save to Folder
             </button>
             <button className="button secondary" disabled={isConverting || files.length === 0} onClick={clearAll}>
               Clear All
