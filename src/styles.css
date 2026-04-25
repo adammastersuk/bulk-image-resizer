@@ -536,6 +536,25 @@ input[type='file'] { display: none; }
   margin-bottom: 12px;
 }
 
+.notice-banner {
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  border: 1px solid;
+}
+
+.notice-banner.success {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #a7f3d0;
+}
+
+.notice-banner.info {
+  background: #eff6ff;
+  color: #1e3a8a;
+  border-color: #bfdbfe;
+}
+
 @media (max-width: 1024px) {
   .workspace { grid-template-columns: 1fr; }
   .controls-sidebar { position: static; }
@@ -544,6 +563,8 @@ input[type='file'] { display: none; }
 @media (max-width: 720px) {
   .topbar { flex-direction: column; align-items: stretch; }
   .gallery { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .workspace-canvas.empty .canvas-overlay p { font-size: 24px; }
+  .controls-sidebar { padding-bottom: 16px; }
 }
 
 .document-gallery {
