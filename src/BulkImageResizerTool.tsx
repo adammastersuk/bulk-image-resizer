@@ -6,7 +6,7 @@ import { CSSProperties, ChangeEvent, DragEvent, MouseEvent, PointerEvent, useEff
 type FitMode = 'contain' | 'crop';
 type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
 type ItemStatus = 'idle' | 'processing' | 'done' | 'error';
-type SizePresetId = 'custom' | 'plp-square';
+type SizePresetId = 'custom' | 'plp-square' | 'hero-landscape' | 'social-portrait';
 
 interface SourceImage {
   id: string;
@@ -29,6 +29,8 @@ interface ProcessedImage {
   filename: string;
   blob: Blob;
 }
+
+type NoticeTone = 'success' | 'info';
 
 interface ProcessOptions {
   width: number;
@@ -71,7 +73,9 @@ interface CropRect {
 
 const SIZE_PRESETS: SizePreset[] = [
   { id: 'custom', label: 'Custom' },
-  { id: 'plp-square', label: 'PLP Square (1000x1000)', dimensions: { width: 1000, height: 1000 } }
+  { id: 'plp-square', label: 'PLP Square (1000x1000)', dimensions: { width: 1000, height: 1000 } },
+  { id: 'hero-landscape', label: 'Hero Landscape (1600x900)', dimensions: { width: 1600, height: 900 } },
+  { id: 'social-portrait', label: 'Social Portrait (1080x1350)', dimensions: { width: 1080, height: 1350 } }
 ];
 
 const PRESET_STORAGE_KEY = 'bulk-image-resizer:size-preset';
@@ -93,6 +97,7 @@ function BulkImageResizerTool() {
   const [selectedPreset, setSelectedPreset] = useState<SizePresetId>('plp-square');
   const [dragOver, setDragOver] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [globalNotice, setGlobalNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
   const imageUrlsRef = useRef<string[]>([]);
@@ -113,11 +118,11 @@ function BulkImageResizerTool() {
 
   useEffect(() => {
     const savedPreset = localStorage.getItem(PRESET_STORAGE_KEY);
-    if (savedPreset !== 'custom' && savedPreset !== 'plp-square') {
+    if (!SIZE_PRESETS.some((preset) => preset.id === savedPreset)) {
       return;
     }
 
-    setSelectedPreset(savedPreset);
+    setSelectedPreset(savedPreset as SizePresetId);
     const preset = SIZE_PRESETS.find((item) => item.id === savedPreset);
     if (preset?.dimensions) {
       setOptions((prev) => ({ ...prev, ...preset.dimensions }));
@@ -220,9 +225,24 @@ function BulkImageResizerTool() {
   };
 
   const addFiles = async (files: FileList | File[]) => {
-    const incoming = Array.from(files).filter((f) => isAcceptedImageFile(f));
+    setGlobalError(null);
+    setGlobalNotice(null);
+    const existingKeys = new Set(images.map((image) => `${image.file.name}-${image.file.size}-${image.file.lastModified}`));
+    const uniqueIncoming = Array.from(files).filter((file) => {
+      const key = `${file.name}-${file.size}-${file.lastModified}`;
+      const isDuplicate = existingKeys.has(key);
+      if (!isDuplicate) {
+        existingKeys.add(key);
+      }
+      return !isDuplicate;
+    });
+    const incoming = uniqueIncoming.filter((f) => isAcceptedImageFile(f));
+    const duplicateCount = Array.from(files).length - uniqueIncoming.length;
+    const invalidCount = uniqueIncoming.length - incoming.length;
+
     if (!incoming.length) {
-      setGlobalError('No valid images were found. Please choose common image formats (JPEG, PNG, WebP, AVIF, GIF, BMP, TIFF, SVG).');
+      const reason = duplicateCount > 0 ? 'All selected files were already added.' : 'No valid images were found.';
+      setGlobalError(`${reason} Please choose common image formats (JPEG, PNG, WebP, AVIF, GIF, BMP, TIFF, SVG).`);
       return;
     }
 
@@ -252,9 +272,18 @@ function BulkImageResizerTool() {
     }
 
     setImages((prev) => [...prev, ...newItems]);
-    setGlobalError(
-      rejectedCount > 0 ? `Skipped ${rejectedCount} image${rejectedCount === 1 ? '' : 's'} that could not be read.` : null
-    );
+    const skipped = rejectedCount + invalidCount + duplicateCount;
+    if (skipped > 0) {
+      setGlobalNotice({
+        tone: 'info',
+        message: `Added ${newItems.length} image${newItems.length === 1 ? '' : 's'}. Skipped ${skipped} file${
+          skipped === 1 ? '' : 's'
+        } (${duplicateCount} duplicate, ${invalidCount} unsupported, ${rejectedCount} unreadable).`
+      });
+      return;
+    }
+
+    setGlobalNotice({ tone: 'success', message: `Added ${newItems.length} image${newItems.length === 1 ? '' : 's'} to your batch.` });
   };
 
   const onFileInput = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -274,10 +303,13 @@ function BulkImageResizerTool() {
   };
 
   const clearAllImages = () => {
+    disableInlineCropEditing();
     setImages((prev) => {
       prev.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       return [];
     });
+    setProgress({ done: 0, total: 0 });
+    setGlobalNotice({ tone: 'info', message: 'Cleared all images from the workspace.' });
   };
 
   const formatFileSize = (bytes: number) => {
@@ -514,11 +546,14 @@ function BulkImageResizerTool() {
   };
 
   const buildName = (pattern: string, originalName: string, index: number) => {
-    const withOriginal = pattern.replace(/ORIGINAL-NAME/g, originalName);
-    return withOriginal
+    const basePattern = pattern.trim() || 'ORIGINAL-NAME-{nnn}';
+    const withOriginal = basePattern.replace(/ORIGINAL-NAME/g, originalName);
+    const resolved = withOriginal
       .replace(/\{n\}/g, String(index + 1))
       .replace(/\{nn\}/g, String(index + 1).padStart(2, '0'))
       .replace(/\{nnn\}/g, String(index + 1).padStart(3, '0'));
+    const sanitized = resolved.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-').replace(/\s+/g, ' ').trim();
+    return sanitized || `image-${String(index + 1).padStart(3, '0')}`;
   };
 
   const canvasToBlob = (canvas: HTMLCanvasElement, mime: string, quality: number) =>
@@ -603,91 +638,122 @@ function BulkImageResizerTool() {
 
   const runProcessing = async (saveToFolder: boolean) => {
     setGlobalError(null);
+    setGlobalNotice(null);
     setIsProcessing(true);
-
-    let directoryHandle: FileSystemDirectoryHandle | undefined;
-    if (saveToFolder && supportsDirectoryPicker) {
-      try {
-        directoryHandle = await (
-          window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }
-        ).showDirectoryPicker();
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          console.info('Folder selection cancelled by user.');
-          setProgress({ done: 0, total: 0 });
-          setIsProcessing(false);
-          return;
-        }
-
-        throw error;
-      }
-    }
-
-    setProgress({ done: 0, total: images.length });
-    setImages((prev) =>
-      prev.map((img) => ({
-        ...img,
-        status: 'idle',
-        error: undefined,
-        autoFocalPoint: options.fitMode === 'crop' ? undefined : img.autoFocalPoint,
-        smartCropApplied: options.fitMode === 'crop' ? false : img.smartCropApplied
-      }))
-    );
-
-    const outputs: ProcessedImage[] = [];
-    const concurrencyLimit = 3;
-    let currentIndex = 0;
-
-    const worker = async () => {
-      while (currentIndex < images.length) {
-        const i = currentIndex;
-        currentIndex += 1;
-        const image = images[i];
-
-        updateImage(image.id, (img) => ({ ...img, status: 'processing' }));
-
+    try {
+      let directoryHandle: FileSystemDirectoryHandle | undefined;
+      if (saveToFolder && supportsDirectoryPicker) {
         try {
-          const result = await processImage(image, i);
-          outputs.push(result);
-
-          if (directoryHandle) {
-            const fileHandle = await directoryHandle.getFileHandle(result.filename, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(result.blob);
-            await writable.close();
+          directoryHandle = await (
+            window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }
+          ).showDirectoryPicker();
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            console.info('Folder selection cancelled by user.');
+            setProgress({ done: 0, total: 0 });
+            setGlobalNotice({ tone: 'info', message: 'Folder selection cancelled. No files were processed.' });
+            return;
           }
 
-          updateImage(image.id, (img) => ({ ...img, status: 'done' }));
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown processing error';
-          updateImage(image.id, (img) => ({ ...img, status: 'error', error: message }));
+          throw error;
         }
-
-        setProgress((prev) => ({ ...prev, done: prev.done + 1 }));
-        await new Promise((resolve) => setTimeout(resolve, 0));
       }
-    };
 
-    await Promise.all(Array.from({ length: Math.min(concurrencyLimit, images.length) }, () => worker()));
+      setProgress({ done: 0, total: images.length });
+      setImages((prev) =>
+        prev.map((img) => ({
+          ...img,
+          status: 'idle',
+          error: undefined,
+          autoFocalPoint: options.fitMode === 'crop' ? undefined : img.autoFocalPoint,
+          smartCropApplied: options.fitMode === 'crop' ? false : img.smartCropApplied
+        }))
+      );
 
-    if (!directoryHandle) {
-      const zip = new JSZip();
-      outputs
-        .sort((a, b) => a.index - b.index)
-        .forEach((output) => {
-          zip.file(output.filename, output.blob);
+      const outputs: ProcessedImage[] = [];
+      const concurrencyLimit = 3;
+      let currentIndex = 0;
+      const usedFilenames = new Set<string>();
+
+      const worker = async () => {
+        while (currentIndex < images.length) {
+          const i = currentIndex;
+          currentIndex += 1;
+          const image = images[i];
+
+          updateImage(image.id, (img) => ({ ...img, status: 'processing' }));
+
+          try {
+            const result = await processImage(image, i);
+            const lastDotIndex = result.filename.lastIndexOf('.');
+            const baseName = lastDotIndex > 0 ? result.filename.slice(0, lastDotIndex) : result.filename;
+            const ext = lastDotIndex > 0 ? result.filename.slice(lastDotIndex + 1) : 'png';
+            let filename = `${baseName}.${ext}`;
+            let sequence = 1;
+            while (usedFilenames.has(filename.toLowerCase())) {
+              filename = `${baseName}-${String(sequence).padStart(2, '0')}.${ext}`;
+              sequence += 1;
+            }
+            usedFilenames.add(filename.toLowerCase());
+            outputs.push({ ...result, filename });
+
+            if (directoryHandle) {
+              const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+              const writable = await fileHandle.createWritable();
+              await writable.write(result.blob);
+              await writable.close();
+            }
+
+            updateImage(image.id, (img) => ({ ...img, status: 'done' }));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unknown processing error';
+            updateImage(image.id, (img) => ({ ...img, status: 'error', error: message }));
+          }
+
+          setProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(concurrencyLimit, images.length) }, () => worker()));
+
+      if (!directoryHandle) {
+        const zip = new JSZip();
+        outputs
+          .sort((a, b) => a.index - b.index)
+          .forEach((output) => {
+            zip.file(output.filename, output.blob);
+          });
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = 'resized-images.zip';
+        anchor.click();
+        URL.revokeObjectURL(url);
+      }
+
+      const failedCount = images.length - outputs.length;
+      if (outputs.length > 0) {
+        setGlobalNotice({
+          tone: failedCount === 0 ? 'success' : 'info',
+          message: `Processed ${outputs.length}/${images.length} image${images.length === 1 ? '' : 's'}${
+            failedCount > 0 ? ` (${failedCount} failed)` : ''
+          }. ${directoryHandle ? 'Saved to selected folder.' : 'ZIP download started.'}`
         });
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = 'resized-images.zip';
-      anchor.click();
-      URL.revokeObjectURL(url);
+      } else {
+        setGlobalError('No files were exported. Please review per-image errors and try again.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected processing error.';
+      setGlobalError(`Processing stopped: ${message}`);
+    } finally {
+      setIsProcessing(false);
     }
-
-    setIsProcessing(false);
   };
+
+  const failedCount = images.filter((image) => image.status === 'error').length;
+  const doneCount = images.filter((image) => image.status === 'done').length;
 
   return (
     <div className="tool-shell">
@@ -701,7 +767,8 @@ function BulkImageResizerTool() {
         </label>
       </header>
 
-      {globalError && <div className="error-banner">{globalError}</div>}
+      {globalError && <div className="error-banner" role="alert">{globalError}</div>}
+      {globalNotice && <div className={`notice-banner ${globalNotice.tone}`}>{globalNotice.message}</div>}
 
       <div className="workspace">
         <main className="workspace-main">
@@ -721,6 +788,7 @@ function BulkImageResizerTool() {
               setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
+            aria-label="Image upload dropzone"
           >
             <div className={`canvas-overlay ${images.length > 0 ? 'subtle' : ''}`}>
               <p>
@@ -763,6 +831,7 @@ function BulkImageResizerTool() {
                           removeImage(image.id);
                         }}
                         disabled={isProcessing}
+                        type="button"
                       >
                         Remove
                       </button>
@@ -777,6 +846,7 @@ function BulkImageResizerTool() {
                             }
                           }}
                           disabled={isProcessing}
+                          type="button"
                         >
                           Reset crop
                         </button>
@@ -1017,24 +1087,28 @@ function BulkImageResizerTool() {
           </div>
 
           <div className="actions compact-actions">
-            <button className="button" disabled={!canProcess} onClick={() => runProcessing(false)}>
+            <button className="button" disabled={!canProcess} onClick={() => runProcessing(false)} type="button">
               Process + Download ZIP
             </button>
             <button
               className="button secondary"
               disabled={!canProcess || !supportsDirectoryPicker}
               onClick={() => runProcessing(true)}
+              type="button"
             >
               Process + Save to Folder
             </button>
-            <button className="button secondary" disabled={isProcessing || images.length === 0} onClick={clearAllImages}>
+            <button className="button secondary" disabled={isProcessing || images.length === 0} onClick={clearAllImages} type="button">
               Clear All
             </button>
-            <div className="progress">
+            <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPct}>
               <div className="bar" style={{ width: `${progressPct}%` }} />
             </div>
-            <span>
-              Progress: {progress.done}/{progress.total}
+            <span aria-live="polite">
+              Progress: {progress.done}/{progress.total} ({progressPct}%)
+            </span>
+            <span className="status-summary">
+              Queue: {images.length} total · {doneCount} done · {failedCount} failed
             </span>
           </div>
 
