@@ -46,13 +46,13 @@ const pica = Pica();
 const supportsDirectoryPicker = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
 const DEFAULT_OPTIONS: ProcessOptions = {
-  width: 1200,
-  height: 1200,
+  width: 1000,
+  height: 1000,
   fitMode: 'crop',
   backgroundColor: '#ffffff',
   useAutoFocal: true,
-  format: 'original',
-  quality: 0.9,
+  format: 'webp',
+  quality: 0.8,
   renamePattern: 'ORIGINAL-NAME-{nnn}'
 };
 
@@ -90,7 +90,7 @@ const ACCEPTED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif',
 function BulkImageResizerTool() {
   const [images, setImages] = useState<SourceImage[]>([]);
   const [options, setOptions] = useState<ProcessOptions>(DEFAULT_OPTIONS);
-  const [selectedPreset, setSelectedPreset] = useState<SizePresetId>('custom');
+  const [selectedPreset, setSelectedPreset] = useState<SizePresetId>('plp-square');
   const [dragOver, setDragOver] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -983,7 +983,7 @@ function BulkImageResizerTool() {
             </label>
 
             <label>
-              Quality ({Math.round(options.quality * 100)})
+              Quality ({Math.round(options.quality * 100)}%)
               <input
                 type="range"
                 min={0.1}
