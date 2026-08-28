@@ -4,7 +4,7 @@ import Smartcrop from 'smartcrop';
 import { CSSProperties, ChangeEvent, DragEvent, MouseEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type FitMode = 'contain' | 'crop';
-type OutputFormat = 'original' | 'jpeg' | 'webp' | 'avif';
+type OutputFormat = 'original' | 'jpeg' | 'png' | 'webp' | 'avif';
 type ItemStatus = 'idle' | 'processing' | 'done' | 'error';
 type SizePresetId = 'custom' | 'plp-square' | 'hero-landscape' | 'social-portrait';
 
@@ -79,6 +79,11 @@ const SIZE_PRESETS: SizePreset[] = [
 ];
 
 const PRESET_STORAGE_KEY = 'bulk-image-resizer:size-preset';
+const OPTIONS_STORAGE_KEY = 'bulk-image-resizer:options';
+const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_SOURCE_PIXELS = 100_000_000;
+const MAX_OUTPUT_DIMENSION = 10_000;
+const MAX_OUTPUT_PIXELS = 40_000_000;
 const ACCEPTED_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -112,11 +117,23 @@ function BulkImageResizerTool() {
   const progressPct = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
 
   const canProcess = useMemo(
-    () => images.length > 0 && options.width > 0 && options.height > 0 && !isProcessing,
+    () => images.length > 0 && options.width > 0 && options.height > 0 &&
+      options.width <= MAX_OUTPUT_DIMENSION && options.height <= MAX_OUTPUT_DIMENSION &&
+      options.width * options.height <= MAX_OUTPUT_PIXELS && !isProcessing,
     [images.length, options.width, options.height, isProcessing]
   );
 
   useEffect(() => {
+    try {
+      const savedOptions = localStorage.getItem(OPTIONS_STORAGE_KEY);
+      if (savedOptions) {
+        const parsed = JSON.parse(savedOptions) as Partial<ProcessOptions>;
+        setOptions((current) => ({ ...current, ...parsed }));
+      }
+    } catch {
+      localStorage.removeItem(OPTIONS_STORAGE_KEY);
+    }
+
     const savedPreset = localStorage.getItem(PRESET_STORAGE_KEY);
     if (!SIZE_PRESETS.some((preset) => preset.id === savedPreset)) {
       return;
@@ -132,6 +149,10 @@ function BulkImageResizerTool() {
   useEffect(() => {
     localStorage.setItem(PRESET_STORAGE_KEY, selectedPreset);
   }, [selectedPreset]);
+
+  useEffect(() => {
+    localStorage.setItem(OPTIONS_STORAGE_KEY, JSON.stringify(options));
+  }, [options]);
 
   useEffect(() => {
     imageUrlsRef.current = images.map((image) => image.previewUrl);
@@ -196,7 +217,7 @@ function BulkImageResizerTool() {
   };
 
   const onDimensionChange = (dimension: 'width' | 'height', value: number) => {
-    setOptions((prev) => ({ ...prev, [dimension]: value || 1 }));
+    setOptions((prev) => ({ ...prev, [dimension]: Math.max(1, Math.min(MAX_OUTPUT_DIMENSION, value || 1)) }));
     setSelectedPreset('custom');
   };
 
@@ -236,19 +257,22 @@ function BulkImageResizerTool() {
       }
       return !isDuplicate;
     });
-    const incoming = uniqueIncoming.filter((f) => isAcceptedImageFile(f));
+    const incoming = uniqueIncoming.filter((f) => isAcceptedImageFile(f) && f.size <= MAX_FILE_SIZE);
     const duplicateCount = Array.from(files).length - uniqueIncoming.length;
     const invalidCount = uniqueIncoming.length - incoming.length;
 
     if (!incoming.length) {
       const reason = duplicateCount > 0 ? 'All selected files were already added.' : 'No valid images were found.';
-      setGlobalError(`${reason} Please choose common image formats (JPEG, PNG, WebP, AVIF, GIF, BMP, TIFF, SVG).`);
+      setGlobalError(`${reason} Use a supported image no larger than 100 MB and 100 megapixels.`);
       return;
     }
 
     const settledItems = await Promise.allSettled(
       incoming.map(async (file): Promise<SourceImage> => {
         const dimensions = await getImageDimensions(file);
+        if (!dimensions.width || !dimensions.height || dimensions.width * dimensions.height > MAX_SOURCE_PIXELS) {
+          throw new Error(`${file.name} exceeds the 100 megapixel safety limit.`);
+        }
         const ext = file.name.includes('.') ? file.name.split('.').pop() ?? 'png' : 'png';
 
         return {
@@ -541,6 +565,7 @@ function BulkImageResizerTool() {
     }
 
     if (format === 'jpeg') return { mime: 'image/jpeg', ext: 'jpg' };
+    if (format === 'png') return { mime: 'image/png', ext: 'png' };
     if (format === 'webp') return { mime: 'image/webp', ext: 'webp' };
     return { mime: 'image/avif', ext: 'avif' };
   };
@@ -562,6 +587,10 @@ function BulkImageResizerTool() {
         (blob) => {
           if (!blob) {
             reject(new Error('Encoding failed for output image.'));
+            return;
+          }
+          if (blob.type && blob.type !== mime) {
+            reject(new Error(`${mime.replace('image/', '').toUpperCase()} export is not supported by this browser.`));
             return;
           }
           resolve(blob);
@@ -587,8 +616,11 @@ function BulkImageResizerTool() {
     let autoFocalPoint: { x: number; y: number } | null = null;
 
     if (options.fitMode === 'contain') {
-      ctx.fillStyle = options.backgroundColor;
-      ctx.fillRect(0, 0, options.width, options.height);
+      const { mime } = formatToMime(options.format, image.ext);
+      if (options.backgroundColor !== 'transparent' || mime === 'image/jpeg') {
+        ctx.fillStyle = options.backgroundColor === 'transparent' ? '#ffffff' : options.backgroundColor;
+        ctx.fillRect(0, 0, options.width, options.height);
+      }
 
       const ratio = Math.min(options.width / loaded.naturalWidth, options.height / loaded.naturalHeight);
       const drawWidth = Math.max(1, Math.round(loaded.naturalWidth * ratio));
@@ -717,7 +749,7 @@ function BulkImageResizerTool() {
 
       await Promise.all(Array.from({ length: Math.min(concurrencyLimit, images.length) }, () => worker()));
 
-      if (!directoryHandle) {
+      if (!directoryHandle && outputs.length > 0) {
         const zip = new JSZip();
         outputs
           .sort((a, b) => a.index - b.index)
@@ -730,14 +762,16 @@ function BulkImageResizerTool() {
         anchor.href = url;
         anchor.download = 'resized-images.zip';
         anchor.click();
-        URL.revokeObjectURL(url);
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
 
       const failedCount = images.length - outputs.length;
       if (outputs.length > 0) {
         setGlobalNotice({
           tone: failedCount === 0 ? 'success' : 'info',
-          message: `Processed ${outputs.length}/${images.length} image${images.length === 1 ? '' : 's'}${
+          message: `Processed ${outputs.length}/${images.length} image${images.length === 1 ? '' : 's'} (${formatFileSize(
+            outputs.reduce((total, output) => total + output.blob.size, 0)
+          )})${
             failedCount > 0 ? ` (${failedCount} failed)` : ''
           }. ${directoryHandle ? 'Saved to selected folder.' : 'ZIP download started.'}`
         });
@@ -754,6 +788,9 @@ function BulkImageResizerTool() {
 
   const failedCount = images.filter((image) => image.status === 'error').length;
   const doneCount = images.filter((image) => image.status === 'done').length;
+  const totalInputSize = images.reduce((total, image) => total + image.file.size, 0);
+  const dimensionsAreSafe = options.width <= MAX_OUTPUT_DIMENSION && options.height <= MAX_OUTPUT_DIMENSION &&
+    options.width * options.height <= MAX_OUTPUT_PIXELS;
 
   return (
     <div className="tool-shell">
@@ -768,7 +805,7 @@ function BulkImageResizerTool() {
       </header>
 
       {globalError && <div className="error-banner" role="alert">{globalError}</div>}
-      {globalNotice && <div className={`notice-banner ${globalNotice.tone}`}>{globalNotice.message}</div>}
+      {globalNotice && <div className={`notice-banner ${globalNotice.tone}`} role="status">{globalNotice.message}</div>}
 
       <div className="workspace">
         <main className="workspace-main">
@@ -803,6 +840,11 @@ function BulkImageResizerTool() {
 
             {images.length > 0 && options.fitMode === 'crop' && (
               <p className="workspace-instruction hint">Click a tile, then drag to adjust crop inline.</p>
+            )}
+            {images.length > 0 && (
+              <p className="batch-summary" aria-live="polite">
+                <strong>{images.length} image{images.length === 1 ? '' : 's'}</strong> · {formatFileSize(totalInputSize)} total · Output canvas {options.width} × {options.height}
+              </p>
             )}
 
             <section className="gallery">
@@ -961,6 +1003,7 @@ function BulkImageResizerTool() {
                     <small>
                       {image.dimensions.width} × {image.dimensions.height} • {formatFileSize(image.file.size)}
                     </small>
+                    <small>Expected output: {options.width} × {options.height}</small>
                     <small>Status: {image.status}</small>
                     {image.error && <small className="error">{image.error}</small>}
                   </div>
@@ -990,6 +1033,7 @@ function BulkImageResizerTool() {
               <input
                 type="number"
                 min={1}
+                max={MAX_OUTPUT_DIMENSION}
                 value={options.width}
                 onChange={(e) => onDimensionChange('width', Number(e.target.value))}
               />
@@ -1000,6 +1044,7 @@ function BulkImageResizerTool() {
               <input
                 type="number"
                 min={1}
+                max={MAX_OUTPUT_DIMENSION}
                 value={options.height}
                 onChange={(e) => onDimensionChange('height', Number(e.target.value))}
               />
@@ -1036,6 +1081,18 @@ function BulkImageResizerTool() {
                     style={options.backgroundColor === 'transparent' ? undefined : { backgroundColor: options.backgroundColor }}
                   />
                 </div>
+                <span className="contain-bg-control">
+                  <input
+                    type="color"
+                    aria-label="Custom padding colour"
+                    value={options.backgroundColor === 'transparent' ? '#ffffff' : options.backgroundColor}
+                    onChange={(e) => setOptions((prev) => ({ ...prev, backgroundColor: e.target.value }))}
+                  />
+                  Custom colour
+                </span>
+                {options.backgroundColor === 'transparent' && formatToMime(options.format, 'png').mime === 'image/jpeg' && (
+                  <small className="field-warning">JPEG cannot preserve transparency; padding will export as white.</small>
+                )}
               </label>
             )}
 
@@ -1047,6 +1104,7 @@ function BulkImageResizerTool() {
               >
                 <option value="original">Original</option>
                 <option value="jpeg">JPEG</option>
+                <option value="png">PNG</option>
                 <option value="webp">WebP</option>
                 <option value="avif">AVIF</option>
               </select>
@@ -1061,7 +1119,7 @@ function BulkImageResizerTool() {
                 step={0.05}
                 value={options.quality}
                 onChange={(e) => setOptions((prev) => ({ ...prev, quality: Number(e.target.value) }))}
-                disabled={options.format === 'original'}
+                disabled={options.format === 'original' || options.format === 'png'}
               />
             </label>
 
@@ -1085,6 +1143,10 @@ function BulkImageResizerTool() {
               Auto focal crop
             </label>
           </div>
+
+          {!dimensionsAreSafe && (
+            <div className="field-error" role="alert">Output must be at most 10,000 px per side and 40 megapixels total.</div>
+          )}
 
           <div className="actions compact-actions">
             <button className="button" disabled={!canProcess} onClick={() => runProcessing(false)} type="button">
