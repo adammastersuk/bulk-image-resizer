@@ -18,9 +18,14 @@ A fast internal ecommerce-oriented bulk image resizer built with **React + TypeS
 - Output formats:
   - Original (maps to source type where possible)
   - JPEG
+  - PNG
   - WebP
   - AVIF
 - Quality slider for lossy output encoders
+- White, black, transparent, or custom-colour padding in fit-inside mode
+- Batch input-size and expected-output summaries
+- Safety limits for unusually large source files, source dimensions, and output canvases
+- Remembers the last-used output configuration in local browser storage
 - Bulk rename patterns with tokens:
   - `ORIGINAL-NAME`
   - `{n}`, `{nn}`, `{nnn}`
